@@ -50,7 +50,7 @@ type TpmCmdFlags struct {
 
 	// TPM
 	DevicePath               string `yaml:"device_path"`
-	Nonce                    string `yaml:"nonce"`
+	Nonce                    []byte `yaml:"nonce"`
 	QuoteOutputPath          string `yaml:"quote_output"`
 	QuoteSignatureOutputPath string `yaml:"quote_signature_output"`
 
@@ -110,12 +110,12 @@ var tpmProveCmd = &cobra.Command{
 			}
 		}
 
-		if tpmCmdFlags.Nonce == "" {
+		if tpmCmdFlags.Nonce == nil || len(tpmCmdFlags.Nonce) == 0 {
 			nonce, err := generateSecureNonce()
 			if err != nil {
 				return fmt.Errorf("generating secure nonce: %w", err)
 			} else {
-				fmt.Printf("Using nonce: %s\n", nonce)
+				fmt.Printf("Using nonce: %s\n", hex.EncodeToString(nonce))
 			}
 			tpmCmdFlags.Nonce = nonce
 		}
@@ -267,7 +267,7 @@ func createTPMQuote(tpm transport.TPM, akHandle tpm2.TPMHandle, akName tpm2.TPM2
 			Name:   akName,
 			Auth:   tpm2.PasswordAuth(nil),
 		},
-		QualifyingData: tpm2.TPM2BData{Buffer: []byte(tpmCmdFlags.Nonce)},
+		QualifyingData: tpm2.TPM2BData{Buffer: tpmCmdFlags.Nonce},
 		InScheme:       tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgECDSA},
 		PCRSelect:      pcrRsp.PCRSelectionOut,
 	}.Execute(tpm)
@@ -286,13 +286,13 @@ func openTPM(devicePath string) (transport.TPMCloser, error) {
 	return tpm, nil
 }
 
-func generateSecureNonce() (string, error) {
-	nonce := make([]byte, 32)
+func generateSecureNonce() ([]byte, error) {
+	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return hex.EncodeToString(nonce), nil
+	return nonce, nil
 }
 
 func createAttestationKey(tpm transport.TPM) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
@@ -387,9 +387,14 @@ func init() {
 
 	// TPM Flags
 	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.DevicePath, "device", "d", "/dev/tpm0", "Path to the TPM device (e.g., /dev/tpm0)")
-	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.Nonce, "nonce", "n", "", "Nonce for the quote (default to random string)")
 	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.QuoteOutputPath, "quote-output", "q", "quote.bin", "Output file for the TPM quote")
 	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.QuoteSignatureOutputPath, "signature-output", "s", "quote.sig", "Output file for the TPM quote signature")
+
+	var nonce string
+	tpmCmd.PersistentFlags().StringVarP(&nonce, "nonce", "n", "", "Nonce for the quote (default to random string)")
+	if nonce != "" {
+		tpmCmdFlags.Nonce = []byte(nonce)
+	}
 
 	// ZKP Flags
 	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.ProofOutputPath, "proof-output", "p", "proof.bin", "Output file for the ZKP proof")

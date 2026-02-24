@@ -92,6 +92,10 @@ var tpmProveCmd = &cobra.Command{
 	Short: "Create a TPM quote zero knowledge proof",
 	Long:  "Create a TPM quote zero knowledge proof for the current platform state.",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := parseNonceFlag(cmd); err != nil {
+			return err
+		}
+
 		if len(tpmCmdFlags.Nonce) == 0 {
 			nonce, err := generateSecureNonce()
 			if err != nil {
@@ -172,6 +176,10 @@ var tpmVerifyCmd = &cobra.Command{
 	Short: "Verify a TPM quote zero knowledge proof",
 	Long:  "Verify a TPM quote zero knowledge proof against the current platform state.",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := parseNonceFlag(cmd); err != nil {
+			return err
+		}
+
 		if len(tpmCmdFlags.Nonce) == 0 {
 			return fmt.Errorf("nonce must be provided either via command line or policy file")
 		}
@@ -424,6 +432,25 @@ func parseYaml(cmd *cobra.Command) error {
 	return nil
 }
 
+func parseNonceFlag(cmd *cobra.Command) error {
+	nonceHex, err := cmd.Flags().GetString("nonce")
+	if err != nil {
+		return fmt.Errorf("reading nonce flag: %w", err)
+	}
+
+	if nonceHex == "" {
+		return nil
+	}
+
+	parsedNonce, err := hex.DecodeString(nonceHex)
+	if err != nil {
+		return fmt.Errorf("invalid nonce: %w", err)
+	}
+
+	tpmCmdFlags.Nonce = parsedNonce
+	return nil
+}
+
 func verifyArguments(cmd *cobra.Command) error {
 	if len(tpmCmdFlags.Statement.KernelAllowList) > 5 {
 		return fmt.Errorf("kernel allow list cannot contain more than 5 entries")
@@ -463,15 +490,7 @@ func init() {
 	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.QuoteOutputPath, "quote-output", "q", "quote.bin", "Output file for the TPM quote")
 	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.QuoteSignatureOutputPath, "signature-output", "s", "quote.sig", "Output file for the TPM quote signature")
 
-	var nonce string
-	tpmCmd.PersistentFlags().StringVarP(&nonce, "nonce", "n", "", "Nonce for the quote (default to random string)")
-	if len(nonce) > 0 {
-		parsedNonce, err := hex.DecodeString(nonce)
-		if err != nil {
-			panic(fmt.Errorf("invalid nonce: %w", err))
-		}
-		tpmCmdFlags.Nonce = parsedNonce
-	}
+	tpmCmd.PersistentFlags().StringP("nonce", "n", "", "Nonce for the quote (hex string; default is random nonce for prove)")
 
 	// ZKP Flags
 	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.ProofOutputPath, "proof-output", "p", "proof.json", "Output file for the ZKP proof")

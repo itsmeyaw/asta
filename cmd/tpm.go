@@ -17,10 +17,14 @@ limitations under the License.
 package cmd
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 
 	"github.com/goccy/go-yaml"
@@ -87,40 +91,7 @@ var tpmProveCmd = &cobra.Command{
 	Short: "Create a TPM quote zero knowledge proof",
 	Long:  "Create a TPM quote zero knowledge proof for the current platform state.",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		if len(tpmCmdFlags.Statement.KernelAllowList) > 5 {
-			return fmt.Errorf("kernel allow list cannot contain more than 5 entries")
-		}
-
-		if _, err := os.Stat(tpmCmdFlags.DevicePath); os.IsNotExist(err) {
-			return fmt.Errorf("TPM device not found at %q: %w", tpmCmdFlags.DevicePath, err)
-		}
-
-		pcrCount, err := getPCRCount(tpmCmdFlags.DevicePath)
-		if err != nil {
-			return fmt.Errorf("getting PCR count: %w", err)
-		}
-
-		for pcrIndex := range tpmCmdFlags.Statement.PCRs {
-			if uint16(pcrIndex) >= pcrCount {
-				return fmt.Errorf("PCR index %d is out of bounds (max: %d)", pcrIndex, pcrCount-1)
-			}
-
-			if len(tpmCmdFlags.Statement.PCRs[pcrIndex].Sha256) > 5 {
-				return fmt.Errorf("PCR %d allow list cannot contain more than 5 entries", pcrIndex)
-			}
-		}
-
-		if tpmCmdFlags.Nonce == nil || len(tpmCmdFlags.Nonce) == 0 {
-			nonce, err := generateSecureNonce()
-			if err != nil {
-				return fmt.Errorf("generating secure nonce: %w", err)
-			} else {
-				fmt.Printf("Using nonce: %s\n", hex.EncodeToString(nonce))
-			}
-			tpmCmdFlags.Nonce = nonce
-		}
-
-		return nil
+		return verifyArguments(cmd)
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tpm, err := openTPM(tpmCmdFlags.DevicePath)
@@ -157,7 +128,8 @@ var tpmProveCmd = &cobra.Command{
 		}
 
 		if tpmCmdFlags.QuoteSignatureOutputPath != "" {
-			if err := os.WriteFile(tpmCmdFlags.QuoteSignatureOutputPath, signature.SignatureR.Buffer, 0644); err != nil {
+			signatureBytes := append(signature.SignatureR.Buffer, signature.SignatureS.Buffer...)
+			if err := os.WriteFile(tpmCmdFlags.QuoteSignatureOutputPath, signatureBytes, 0644); err != nil {
 				return fmt.Errorf("writing quote signature to file: %w", err)
 			}
 			fmt.Printf("Quote signature written to %s\n", tpmCmdFlags.QuoteSignatureOutputPath)
@@ -188,7 +160,51 @@ var tpmVerifyCmd = &cobra.Command{
 	Use:   "verify",
 	Short: "Verify a TPM quote zero knowledge proof",
 	Long:  "Verify a TPM quote zero knowledge proof against the current platform state.",
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		return verifyArguments(cmd)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// For now, we are verifying the attestation quote first
+		// to understand how the pipeline works.
+
+		quoteBytes, err := os.ReadFile(tpmCmdFlags.QuoteOutputPath)
+		if err != nil {
+			return fmt.Errorf("reading quote file: %w", err)
+		}
+
+		signatureBytes, err := os.ReadFile(tpmCmdFlags.QuoteSignatureOutputPath)
+		if err != nil {
+			return fmt.Errorf("reading quote signature file: %w", err)
+		}
+		signatureR := new(big.Int).SetBytes(signatureBytes[:len(signatureBytes)/2])
+		signatureS := new(big.Int).SetBytes(signatureBytes[len(signatureBytes)/2:])
+
+		proofBytes, err := os.ReadFile(tpmCmdFlags.ProofOutputPath)
+		if err != nil {
+			return fmt.Errorf("reading proof file: %w", err)
+		}
+
+		var proveOutput ProveOutput
+		if err := json.Unmarshal(proofBytes, &proveOutput); err != nil {
+			return fmt.Errorf("parsing proof file: %w", err)
+		}
+
+		// Regenerate the attestation public key
+		pubKey := ecdsa.PublicKey{
+			Curve: elliptic.P256(),
+			X:     new(big.Int).SetBytes(proveOutput.AKPublicKeyX),
+			Y:     new(big.Int).SetBytes(proveOutput.AKPublicKeyY),
+		}
+
+		digest := sha256.Sum256(quoteBytes)
+		isValid := ecdsa.Verify(&pubKey, digest[:], signatureR, signatureS)
+
+		if isValid {
+			fmt.Println("Quote signature is valid.")
+		} else {
+			fmt.Println("Quote signature is invalid.")
+		}
+
 		return nil
 	},
 }
@@ -377,6 +393,42 @@ func parseYaml(cmd *cobra.Command) error {
 
 	merged.PolicyFilePath = cliValues.PolicyFilePath
 	tpmCmdFlags = merged
+	return nil
+}
+
+func verifyArguments(cmd *cobra.Command) error {
+	if len(tpmCmdFlags.Statement.KernelAllowList) > 5 {
+		return fmt.Errorf("kernel allow list cannot contain more than 5 entries")
+	}
+
+	if _, err := os.Stat(tpmCmdFlags.DevicePath); os.IsNotExist(err) {
+		return fmt.Errorf("TPM device not found at %q: %w", tpmCmdFlags.DevicePath, err)
+	}
+
+	pcrCount, err := getPCRCount(tpmCmdFlags.DevicePath)
+	if err != nil {
+		return fmt.Errorf("getting PCR count: %w", err)
+	}
+
+	for pcrIndex := range tpmCmdFlags.Statement.PCRs {
+		if uint16(pcrIndex) >= pcrCount {
+			return fmt.Errorf("PCR index %d is out of bounds (max: %d)", pcrIndex, pcrCount-1)
+		}
+
+		if len(tpmCmdFlags.Statement.PCRs[pcrIndex].Sha256) > 5 {
+			return fmt.Errorf("PCR %d allow list cannot contain more than 5 entries", pcrIndex)
+		}
+	}
+
+	if tpmCmdFlags.Nonce == nil || len(tpmCmdFlags.Nonce) == 0 {
+		nonce, err := generateSecureNonce()
+		if err != nil {
+			return fmt.Errorf("generating secure nonce: %w", err)
+		} else {
+			fmt.Printf("Using nonce: %s\n", hex.EncodeToString(nonce))
+		}
+		tpmCmdFlags.Nonce = nonce
+	}
 	return nil
 }
 

@@ -88,9 +88,10 @@ var tpmCmd = &cobra.Command{
 }
 
 var tpmProveCmd = &cobra.Command{
-	Use:   "prove",
-	Short: "Create a TPM quote zero knowledge proof",
-	Long:  "Create a TPM quote zero knowledge proof for the current platform state.",
+	Use:          "prove",
+	Short:        "Create a TPM quote zero knowledge proof",
+	Long:         "Create a TPM quote zero knowledge proof for the current platform state.",
+	SilenceUsage: true,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		if err := parseNonceFlag(cmd); err != nil {
 			return err
@@ -106,7 +107,11 @@ var tpmProveCmd = &cobra.Command{
 			tpmCmdFlags.Nonce = nonce
 		}
 
-		return verifyArguments(cmd)
+		if err := verifyArguments(cmd); err != nil {
+			return usageError(cmd, err)
+		}
+
+		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tpm, err := openTPM(tpmCmdFlags.DevicePath)
@@ -172,19 +177,24 @@ var tpmProveCmd = &cobra.Command{
 }
 
 var tpmVerifyCmd = &cobra.Command{
-	Use:   "verify",
-	Short: "Verify a TPM quote zero knowledge proof",
-	Long:  "Verify a TPM quote zero knowledge proof against the current platform state.",
+	Use:          "verify",
+	Short:        "Verify a TPM quote zero knowledge proof",
+	Long:         "Verify a TPM quote zero knowledge proof against the current platform state.",
+	SilenceUsage: true,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		if err := parseNonceFlag(cmd); err != nil {
-			return err
+			return usageError(cmd, err)
 		}
 
 		if len(tpmCmdFlags.Nonce) == 0 {
-			return fmt.Errorf("nonce must be provided either via command line or policy file")
+			return usageError(cmd, fmt.Errorf("nonce must be provided either via command line or policy file"))
 		}
 
-		return verifyArguments(cmd)
+		if err := verifyArguments(cmd); err != nil {
+			return usageError(cmd, err)
+		}
+
+		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// For now, we are verifying the attestation quote first
@@ -241,6 +251,11 @@ var tpmVerifyCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+func usageError(cmd *cobra.Command, err error) error {
+	_ = cmd.Usage()
+	return err
 }
 
 func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement ZKPStatement, akHandle tpm2.TPMHandle) (ProveOutput, error) {

@@ -268,7 +268,7 @@ func createTPMQuote(tpm transport.TPM, akHandle tpm2.TPMHandle, akName tpm2.TPM2
 			Auth:   tpm2.PasswordAuth(nil),
 		},
 		QualifyingData: tpm2.TPM2BData{Buffer: tpmCmdFlags.Nonce},
-		InScheme:       tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgECDSA},
+		InScheme:       tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgNull},
 		PCRSelect:      pcrRsp.PCRSelectionOut,
 	}.Execute(tpm)
 	if err != nil {

@@ -75,7 +75,7 @@ var tpmQuoteCmd = &cobra.Command{
 				Auth:   tpm2.PasswordAuth(nil),
 			},
 			QualifyingData: tpm2.TPM2BData{Buffer: []byte(quoteFlags.Nonce)},
-			InScheme:       tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgNull},
+			InScheme:       tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgECDSA},
 			PCRSelect:      pcrRsp.PCRSelectionOut,
 		}.Execute(tpm)
 		if err != nil {

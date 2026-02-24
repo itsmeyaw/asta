@@ -268,7 +268,7 @@ func createTPMQuote(tpm transport.TPM, akHandle tpm2.TPMHandle, akName tpm2.TPM2
 			Auth:   tpm2.PasswordAuth(nil),
 		},
 		QualifyingData: tpm2.TPM2BData{Buffer: tpmCmdFlags.Nonce},
-		InScheme:       tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgNull},
+		InScheme:       tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgECDSA},
 		PCRSelect:      pcrRsp.PCRSelectionOut,
 	}.Execute(tpm)
 	if err != nil {
@@ -297,7 +297,7 @@ func generateSecureNonce() ([]byte, error) {
 
 func createAttestationKey(tpm transport.TPM) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
 	template := tpm2.TPMTPublic{
-		Type:    tpm2.TPMAlgRSA,
+		Type:    tpm2.TPMAlgECC,
 		NameAlg: tpm2.TPMAlgSHA256,
 		ObjectAttributes: tpm2.TPMAObject{
 			FixedTPM:            true,
@@ -309,23 +309,26 @@ func createAttestationKey(tpm transport.TPM) (tpm2.TPMHandle, tpm2.TPM2BName, er
 			SignEncrypt:         true,
 		},
 		Parameters: tpm2.NewTPMUPublicParms(
-			tpm2.TPMAlgRSA,
-			&tpm2.TPMSRSAParms{
+			tpm2.TPMAlgECC,
+			&tpm2.TPMSECCParms{
 				Symmetric: tpm2.TPMTSymDefObject{Algorithm: tpm2.TPMAlgNull},
-				Scheme: tpm2.TPMTRSAScheme{
-					Scheme: tpm2.TPMAlgRSASSA,
+				Scheme: tpm2.TPMTECCScheme{
+					Scheme: tpm2.TPMAlgECDSA,
 					Details: tpm2.NewTPMUAsymScheme(
-						tpm2.TPMAlgRSASSA,
-						&tpm2.TPMSSigSchemeRSASSA{HashAlg: tpm2.TPMAlgSHA256},
+						tpm2.TPMAlgECDSA,
+						&tpm2.TPMSSigSchemeECDSA{HashAlg: tpm2.TPMAlgSHA256},
 					),
 				},
-				KeyBits:  2048,
-				Exponent: 0,
+				CurveID: tpm2.TPMECCNistP256,
+				KDF:     tpm2.TPMTKDFScheme{Scheme: tpm2.TPMAlgNull},
 			},
 		),
 		Unique: tpm2.NewTPMUPublicID(
-			tpm2.TPMAlgRSA,
-			&tpm2.TPM2BPublicKeyRSA{Buffer: make([]byte, 256)},
+			tpm2.TPMAlgECC,
+			&tpm2.TPMSECCPoint{
+				X: tpm2.TPM2BECCParameter{Buffer: make([]byte, 32)},
+				Y: tpm2.TPM2BECCParameter{Buffer: make([]byte, 32)},
+			},
 		),
 	}
 

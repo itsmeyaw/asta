@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package tpm
+package cmd
 
 import (
 	"crypto/rand"
@@ -27,7 +27,6 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
-	"github.com/itsmeyaw/asta/cmd"
 	"github.com/spf13/cobra"
 )
 
@@ -379,7 +378,7 @@ func parseYaml(cmd *cobra.Command) error {
 }
 
 func init() {
-	cmd.RootCmd.AddCommand(tpmCmd)
+	RootCmd.AddCommand(tpmCmd)
 	tpmCmd.AddCommand(tpmProveCmd)
 	tpmCmd.AddCommand(tpmVerifyCmd)
 

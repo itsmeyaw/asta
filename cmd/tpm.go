@@ -91,6 +91,16 @@ var tpmProveCmd = &cobra.Command{
 	Short: "Create a TPM quote zero knowledge proof",
 	Long:  "Create a TPM quote zero knowledge proof for the current platform state.",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if tpmCmdFlags.Nonce == nil || len(tpmCmdFlags.Nonce) == 0 {
+			nonce, err := generateSecureNonce()
+			if err != nil {
+				return fmt.Errorf("generating secure nonce: %w", err)
+			} else {
+				fmt.Printf("Using nonce: %s\n", hex.EncodeToString(nonce))
+			}
+			tpmCmdFlags.Nonce = nonce
+		}
+
 		return verifyArguments(cmd)
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -418,16 +428,6 @@ func verifyArguments(cmd *cobra.Command) error {
 		if len(tpmCmdFlags.Statement.PCRs[pcrIndex].Sha256) > 5 {
 			return fmt.Errorf("PCR %d allow list cannot contain more than 5 entries", pcrIndex)
 		}
-	}
-
-	if tpmCmdFlags.Nonce == nil || len(tpmCmdFlags.Nonce) == 0 {
-		nonce, err := generateSecureNonce()
-		if err != nil {
-			return fmt.Errorf("generating secure nonce: %w", err)
-		} else {
-			fmt.Printf("Using nonce: %s\n", hex.EncodeToString(nonce))
-		}
-		tpmCmdFlags.Nonce = nonce
 	}
 	return nil
 }

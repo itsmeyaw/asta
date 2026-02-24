@@ -17,6 +17,7 @@ limitations under the License.
 package cmd
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -171,6 +172,10 @@ var tpmVerifyCmd = &cobra.Command{
 	Short: "Verify a TPM quote zero knowledge proof",
 	Long:  "Verify a TPM quote zero knowledge proof against the current platform state.",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if len(tpmCmdFlags.Nonce) == 0 {
+			return fmt.Errorf("nonce must be provided either via command line or policy file")
+		}
+
 		return verifyArguments(cmd)
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -180,6 +185,17 @@ var tpmVerifyCmd = &cobra.Command{
 		quoteBytes, err := os.ReadFile(tpmCmdFlags.QuoteOutputPath)
 		if err != nil {
 			return fmt.Errorf("reading quote file: %w", err)
+		}
+
+		// Nonce Precheck
+		quoteAttest2B := tpm2.BytesAs2B[tpm2.TPMSAttest, *tpm2.TPMSAttest](quoteBytes)
+		quoteAttest, err := quoteAttest2B.Contents()
+		if err != nil {
+			return fmt.Errorf("parsing quote attestation data: %w", err)
+		}
+
+		if !bytes.Equal(quoteAttest.ExtraData.Buffer, tpmCmdFlags.Nonce) {
+			return fmt.Errorf("quote nonce mismatch: expected %x, got %x", tpmCmdFlags.Nonce, quoteAttest.ExtraData.Buffer)
 		}
 
 		signatureBytes, err := os.ReadFile(tpmCmdFlags.QuoteSignatureOutputPath)
@@ -234,6 +250,8 @@ func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement ZKPSt
 	if err != nil {
 		return ProveOutput{}, fmt.Errorf("parsing AK public key: %w", err)
 	}
+
+	// TODO: Create the ZKP Proof using the circuit and add it to the output
 
 	return ProveOutput{
 		Statement:    statement,

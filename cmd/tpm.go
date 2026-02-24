@@ -400,7 +400,7 @@ func init() {
 	}
 
 	// ZKP Flags
-	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.ProofOutputPath, "proof-output", "p", "proof.bin", "Output file for the ZKP proof")
+	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.ProofOutputPath, "proof-output", "p", "proof.json", "Output file for the ZKP proof")
 
 	// ZKP Constraints
 	tpmCmd.PersistentFlags().Uint64Var(&tpmCmdFlags.Statement.MinimalFirmwareVersion, "min-firmware-version", 0, "Minimal firmware version constraint (inclusive this value)")

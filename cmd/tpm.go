@@ -92,7 +92,7 @@ var tpmProveCmd = &cobra.Command{
 	Short: "Create a TPM quote zero knowledge proof",
 	Long:  "Create a TPM quote zero knowledge proof for the current platform state.",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		if tpmCmdFlags.Nonce == nil || len(tpmCmdFlags.Nonce) == 0 {
+		if len(tpmCmdFlags.Nonce) == 0 {
 			nonce, err := generateSecureNonce()
 			if err != nil {
 				return fmt.Errorf("generating secure nonce: %w", err)
@@ -465,8 +465,12 @@ func init() {
 
 	var nonce string
 	tpmCmd.PersistentFlags().StringVarP(&nonce, "nonce", "n", "", "Nonce for the quote (default to random string)")
-	if nonce != "" {
-		tpmCmdFlags.Nonce = []byte(nonce)
+	if len(nonce) > 0 {
+		parsedNonce, err := hex.DecodeString(nonce)
+		if err != nil {
+			panic(fmt.Errorf("invalid nonce: %w", err))
+		}
+		tpmCmdFlags.Nonce = parsedNonce
 	}
 
 	// ZKP Flags

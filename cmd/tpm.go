@@ -71,7 +71,7 @@ var tpmCmdFlags TpmCmdFlags = TpmCmdFlags{
 type ProveOutput struct {
 	Proof        []byte       `json:"proof"`
 	AKPublicKeyX []byte       `json:"ak_public_key_x"` // Longfellow prove does not require the AK certificate, public key is enough
-	AKPublicKeyY []byte       `json:"ak_public_key_y"`
+	AKPublicKeyY []byte       `json:"ak_public_key_y"` // Quoestion: Do we want to use AK or EK here?
 	Statement    ZKPStatement `json:"zkp_statement"`
 }
 
@@ -120,10 +120,23 @@ var tpmProveCmd = &cobra.Command{
 		}
 		defer tpm.Close()
 
-		akHandle, akName, err := createAttestationKey(tpm)
+		akResponse, err := createAttestationKey(tpm)
 		if err != nil {
 			return fmt.Errorf("creating attestation key: %w", err)
 		}
+		akHandle := akResponse.ObjectHandle
+		akName := akResponse.Name
+
+		akCert, err := getAttestationKeyCertificate(tpm, akResponse)
+		if err != nil {
+			return fmt.Errorf("getting attestation key certificate: %w", err)
+		}
+
+		// Save the akCert to PEM file
+		if err := os.WriteFile("ak_cert.der", akCert.Buffer, 0644); err != nil {
+			return fmt.Errorf("writing AK certificate to file: %w", err)
+		}
+
 		defer func() {
 			_, _ = tpm2.FlushContext{FlushHandle: akHandle}.Execute(tpm)
 		}()
@@ -362,7 +375,7 @@ func generateSecureNonce() ([]byte, error) {
 	return nonce, nil
 }
 
-func createAttestationKey(tpm transport.TPM) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+func createAttestationKey(tpm transport.TPM) (*tpm2.CreatePrimaryResponse, error) {
 	template := tpm2.TPMTPublic{
 		Type:    tpm2.TPMAlgECC,
 		NameAlg: tpm2.TPMAlgSHA256,
@@ -408,9 +421,33 @@ func createAttestationKey(tpm transport.TPM) (tpm2.TPMHandle, tpm2.TPM2BName, er
 		InPublic:    tpm2.New2B(template),
 	}.Execute(tpm)
 	if err != nil {
-		return 0, tpm2.TPM2BName{}, fmt.Errorf("creating attestation key: %w", err)
+		return nil, fmt.Errorf("creating attestation key: %w", err)
 	}
-	return createRsp.ObjectHandle, createRsp.Name, nil
+	return createRsp, nil
+}
+
+func getAttestationKeyCertificate(tpm transport.TPM, akCreationResponse *tpm2.CreatePrimaryResponse) (tpm2.TPM2BDigest, error) {
+	credential, err := tpm2.MakeCredential{
+		Handle:     akCreationResponse.ObjectHandle,
+		ObjectName: akCreationResponse.Name,
+		Credential: akCreationResponse.CreationHash,
+	}.Execute(tpm)
+	if err != nil {
+		return tpm2.TPM2BDigest{}, fmt.Errorf("making credential for AK certificate: %w", err)
+	}
+
+	activationResponse, err := tpm2.ActivateCredential{
+		ActivateHandle: tpm2.AuthHandle{
+			Handle: akCreationResponse.ObjectHandle,
+			Auth:   tpm2.PasswordAuth(nil),
+		},
+		CredentialBlob: credential.CredentialBlob,
+		Secret:         credential.Secret,
+	}.Execute(tpm)
+	if err != nil {
+		return tpm2.TPM2BDigest{}, fmt.Errorf("activating credential for AK certificate: %w", err)
+	}
+	return activationResponse.CertInfo, nil
 }
 
 func parseYaml(cmd *cobra.Command) error {
@@ -463,6 +500,13 @@ func parseNonceFlag(cmd *cobra.Command) error {
 	}
 
 	tpmCmdFlags.Nonce = parsedNonce
+
+	// Enforce that the length of nonce does not exceed 32 bytes because we use SHA256 digest which is 32 bytes
+	// See TPM 2.0 Library Specification Part 2 Section 10.4.3
+	if len(tpmCmdFlags.Nonce) > 32 {
+		return fmt.Errorf("nonce cannot exceed 32 bytes (got %d bytes)", len(tpmCmdFlags.Nonce))
+	}
+
 	return nil
 }
 

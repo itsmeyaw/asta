@@ -169,7 +169,7 @@ var tpmProveCmd = &cobra.Command{
 		}
 
 		// Execute circuit and generate proof file
-		proveOutput, err := generateProve(tpm, quote, tpmCmdFlags.Statement, akHandle)
+		proveOutput, err := generateProve(tpm, quote, tpmCmdFlags.Statement, akHandle, akCert)
 		if err != nil {
 			return fmt.Errorf("executing ZKP circuit: %w", err)
 		}
@@ -271,7 +271,7 @@ func usageError(cmd *cobra.Command, err error) error {
 	return err
 }
 
-func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement ZKPStatement, akHandle tpm2.TPMHandle) (ProveOutput, error) {
+func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement ZKPStatement, akHandle tpm2.TPMHandle, akCert tpm2.TPM2BDigest) (ProveOutput, error) {
 	readPublicResponse, err := tpm2.ReadPublic{ObjectHandle: akHandle}.Execute(tpm)
 	if err != nil {
 		return ProveOutput{}, fmt.Errorf("reading AK public area: %w", err)

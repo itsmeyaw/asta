@@ -417,18 +417,34 @@ func createAttestationKey(tpm transport.TPM) (*tpm2.CreatePrimaryResponse, error
 			Handle: tpm2.TPMRHOwner,
 			Auth:   tpm2.PasswordAuth(nil),
 		},
-		InSensitive: tpm2.TPM2BSensitiveCreate{},
-		InPublic:    tpm2.New2B(template),
+		InPublic: tpm2.New2B(template),
 	}.Execute(tpm)
 	if err != nil {
 		return nil, fmt.Errorf("creating attestation key: %w", err)
 	}
+	defer func() {
+		_, _ = tpm2.FlushContext{FlushHandle: createRsp.ObjectHandle}.Execute(tpm)
+	}()
 	return createRsp, nil
 }
 
 func getAttestationKeyCertificate(tpm transport.TPM, akCreationResponse *tpm2.CreatePrimaryResponse) (tpm2.TPM2BDigest, error) {
+	createRsp, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMRHOwner,
+			Auth:   tpm2.PasswordAuth(nil),
+		},
+		InPublic: tpm2.New2B(tpm2.ECCSRKTemplate),
+	}.Execute(tpm)
+	if err != nil {
+		return tpm2.TPM2BDigest{}, fmt.Errorf("creating credential activation key: %w", err)
+	}
+	defer func() {
+		_, _ = tpm2.FlushContext{FlushHandle: createRsp.ObjectHandle}.Execute(tpm)
+	}()
+
 	credential, err := tpm2.MakeCredential{
-		Handle:     akCreationResponse.ObjectHandle,
+		Handle:     createRsp.ObjectHandle,
 		ObjectName: akCreationResponse.Name,
 		Credential: akCreationResponse.CreationHash,
 	}.Execute(tpm)
@@ -437,9 +453,13 @@ func getAttestationKeyCertificate(tpm transport.TPM, akCreationResponse *tpm2.Cr
 	}
 
 	activationResponse, err := tpm2.ActivateCredential{
-		ActivateHandle: tpm2.AuthHandle{
+		ActivateHandle: tpm2.NamedHandle{
 			Handle: akCreationResponse.ObjectHandle,
-			Auth:   tpm2.PasswordAuth(nil),
+			Name:   akCreationResponse.Name,
+		},
+		KeyHandle: tpm2.NamedHandle{
+			Handle: createRsp.ObjectHandle,
+			Name:   createRsp.Name,
 		},
 		CredentialBlob: credential.CredentialBlob,
 		Secret:         credential.Secret,

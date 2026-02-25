@@ -24,6 +24,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"math/big"
 	"os"
@@ -132,8 +133,15 @@ var tpmProveCmd = &cobra.Command{
 			return fmt.Errorf("getting attestation key certificate: %w", err)
 		}
 
-		// Save the akCert to PEM file
-		if err := os.WriteFile("ak_cert.der", akCert.Buffer, 0644); err != nil {
+		// Save the AK certificate to PEM file
+		akCertPEM := pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: akCert.Buffer,
+		})
+		if akCertPEM == nil {
+			return fmt.Errorf("encoding AK certificate to PEM")
+		}
+		if err := os.WriteFile("ak_cert.pem", akCertPEM, 0644); err != nil {
 			return fmt.Errorf("writing AK certificate to file: %w", err)
 		}
 

@@ -422,9 +422,6 @@ func createAttestationKey(tpm transport.TPM) (*tpm2.CreatePrimaryResponse, error
 	if err != nil {
 		return nil, fmt.Errorf("creating attestation key: %w", err)
 	}
-	defer func() {
-		_, _ = tpm2.FlushContext{FlushHandle: createRsp.ObjectHandle}.Execute(tpm)
-	}()
 	return createRsp, nil
 }
 

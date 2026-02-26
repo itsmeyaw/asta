@@ -25,6 +25,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"math/big"
 	"os"
@@ -154,6 +155,11 @@ var tpmProveCmd = &cobra.Command{
 		akHandle := akResponse.handle
 		akName := akResponse.name
 		akCert := akResponse.certificate
+
+		if err := writeCertificatePEM(akCert, "ak_cert.pem"); err != nil {
+			return fmt.Errorf("writing AK certificate to PEM: %w", err)
+		}
+		fmt.Println("AK certificate written to ak_cert.pem")
 
 		defer func() {
 			_, _ = tpm2.FlushContext{FlushHandle: akHandle}.Execute(tpm)
@@ -287,6 +293,26 @@ var tpmVerifyCmd = &cobra.Command{
 func usageError(cmd *cobra.Command, err error) error {
 	_ = cmd.Usage()
 	return err
+}
+
+func writeCertificatePEM(cert x509.Certificate, outputPath string) error {
+	if len(cert.Raw) == 0 {
+		return fmt.Errorf("AK certificate is empty")
+	}
+
+	pemData := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.Raw,
+	})
+	if pemData == nil {
+		return fmt.Errorf("encoding certificate to PEM")
+	}
+
+	if err := os.WriteFile(outputPath, pemData, 0644); err != nil {
+		return fmt.Errorf("writing file %q: %w", outputPath, err)
+	}
+
+	return nil
 }
 
 func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement ZKPStatement, akHandle tpm2.TPMHandle, akCert x509.Certificate) (ProveOutput, error) {

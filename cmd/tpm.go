@@ -161,6 +161,12 @@ var tpmProveCmd = &cobra.Command{
 		}
 		fmt.Println("AK certificate written to ak_cert.pem")
 
+		// Save the AK public key in PEM format for easier verification in tests and other tools
+		if err := writeAKPublicKeyPEM(akResponse.public, "ak_pub.pem"); err != nil {
+			return fmt.Errorf("writing AK public key to PEM: %w", err)
+		}
+		fmt.Println("AK public key written to ak_pub.pem")
+
 		defer func() {
 			_, _ = tpm2.FlushContext{FlushHandle: akHandle}.Execute(tpm)
 		}()
@@ -306,6 +312,42 @@ func writeCertificatePEM(cert x509.Certificate, outputPath string) error {
 	})
 	if pemData == nil {
 		return fmt.Errorf("encoding certificate to PEM")
+	}
+
+	if err := os.WriteFile(outputPath, pemData, 0644); err != nil {
+		return fmt.Errorf("writing file %q: %w", outputPath, err)
+	}
+
+	return nil
+}
+
+func writeAKPublicKeyPEM(tpmPublic tpm2.TPMTPublic, outputPath string) error {
+	if tpmPublic.Type != tpm2.TPMAlgECC {
+		return fmt.Errorf("unsupported AK public key type: %v", tpmPublic.Type)
+	}
+
+	publicECC, err := tpmPublic.Unique.ECC()
+	if err != nil {
+		return fmt.Errorf("parsing AK ECC public point: %w", err)
+	}
+
+	publicKey := ecdsa.PublicKey{
+		Curve: elliptic.P256(),
+		X:     new(big.Int).SetBytes(publicECC.X.Buffer),
+		Y:     new(big.Int).SetBytes(publicECC.Y.Buffer),
+	}
+
+	publicKeyDER, err := x509.MarshalPKIXPublicKey(&publicKey)
+	if err != nil {
+		return fmt.Errorf("marshaling AK public key: %w", err)
+	}
+
+	pemData := pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: publicKeyDER,
+	})
+	if pemData == nil {
+		return fmt.Errorf("encoding AK public key to PEM")
 	}
 
 	if err := os.WriteFile(outputPath, pemData, 0644); err != nil {

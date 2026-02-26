@@ -22,9 +22,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"math/big"
 	"os"
@@ -43,6 +43,24 @@ type PCRAllowList struct {
 // Mapping of each PCR index to its sha256 allowlist
 type PCRMap map[int]PCRAllowList
 
+type TPM2Key struct {
+	handle      tpm2.TPMHandle
+	name        tpm2.TPM2BName
+	certificate x509.Certificate
+	public      tpm2.TPMTPublic
+}
+
+// Mapping attestation key to the function to get their certificate
+var attesationKeys = map[string]func(transport.TPM) (*TPM2Key, error){
+	"gce": getGCEAttestationKey,
+}
+
+// Taken from go-tpm-tools library
+const (
+	GceAKCertNVIndex     uint32 = 0x01c10002
+	GceAKTemplateNVIndex uint32 = 0x01c10003
+)
+
 type ZKPStatement struct {
 	MinimalFirmwareVersion uint64   `yaml:"minimal_firmware_version" json:"minimal_firmware_version"`
 	SecureBootEnabled      bool     `yaml:"secure_boot_enabled" json:"secure_boot_enabled"`
@@ -59,6 +77,7 @@ type TpmCmdFlags struct {
 	Nonce                    []byte `yaml:"nonce"`
 	QuoteOutputPath          string `yaml:"quote_output"`
 	QuoteSignatureOutputPath string `yaml:"quote_signature_output"`
+	AttestationKeyType       string `yaml:"attestation_key_type"`
 
 	// ZKP
 	ProofOutputPath string       `yaml:"proof_output"`
@@ -121,29 +140,20 @@ var tpmProveCmd = &cobra.Command{
 		}
 		defer tpm.Close()
 
-		akResponse, err := createAttestationKey(tpm)
+		var akResponse *TPM2Key
+
+		switch tpmCmdFlags.AttestationKeyType {
+		case "gce":
+			akResponse, err = getGCEAttestationKey(tpm)
+		default:
+			return fmt.Errorf("unknown attestation key type: %s", tpmCmdFlags.AttestationKeyType)
+		}
 		if err != nil {
 			return fmt.Errorf("creating attestation key: %w", err)
 		}
-		akHandle := akResponse.ObjectHandle
-		akName := akResponse.Name
-
-		akCert, err := getAttestationKeyCertificate(tpm, akResponse)
-		if err != nil {
-			return fmt.Errorf("getting attestation key certificate: %w", err)
-		}
-
-		// Save the AK certificate to PEM file
-		akCertPEM := pem.EncodeToMemory(&pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: akCert.Buffer,
-		})
-		if akCertPEM == nil {
-			return fmt.Errorf("encoding AK certificate to PEM")
-		}
-		if err := os.WriteFile("ak_cert.pem", akCertPEM, 0644); err != nil {
-			return fmt.Errorf("writing AK certificate to file: %w", err)
-		}
+		akHandle := akResponse.handle
+		akName := akResponse.name
+		akCert := akResponse.certificate
 
 		defer func() {
 			_, _ = tpm2.FlushContext{FlushHandle: akHandle}.Execute(tpm)
@@ -279,7 +289,7 @@ func usageError(cmd *cobra.Command, err error) error {
 	return err
 }
 
-func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement ZKPStatement, akHandle tpm2.TPMHandle, akCert tpm2.TPM2BDigest) (ProveOutput, error) {
+func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement ZKPStatement, akHandle tpm2.TPMHandle, akCert x509.Certificate) (ProveOutput, error) {
 	readPublicResponse, err := tpm2.ReadPublic{ObjectHandle: akHandle}.Execute(tpm)
 	if err != nil {
 		return ProveOutput{}, fmt.Errorf("reading AK public area: %w", err)
@@ -433,46 +443,110 @@ func createAttestationKey(tpm transport.TPM) (*tpm2.CreatePrimaryResponse, error
 	return createRsp, nil
 }
 
-func getAttestationKeyCertificate(tpm transport.TPM, akCreationResponse *tpm2.CreatePrimaryResponse) (tpm2.TPM2BDigest, error) {
+func getGCEAttestationKey(tpm transport.TPM) (*TPM2Key, error) {
+	akTemplateBytes, err := readNVIndexData(tpm, GceAKTemplateNVIndex)
+	if err != nil {
+		return nil, fmt.Errorf("reading GCE AK template from NV index: %w", err)
+	}
+
 	createRsp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.AuthHandle{
-			Handle: tpm2.TPMRHOwner,
+			Handle: tpm2.TPMRHEndorsement,
+			Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
 			Auth:   tpm2.PasswordAuth(nil),
 		},
-		InPublic: tpm2.New2B(tpm2.ECCSRKTemplate),
+		InPublic: tpm2.BytesAs2B[tpm2.TPMTPublic, *tpm2.TPMTPublic](akTemplateBytes),
 	}.Execute(tpm)
 	if err != nil {
-		return tpm2.TPM2BDigest{}, fmt.Errorf("creating credential activation key: %w", err)
+		return nil, fmt.Errorf("creating GCE attestation key from NV template: %w", err)
 	}
-	defer func() {
+
+	outPublic, err := createRsp.OutPublic.Contents()
+	if err != nil {
 		_, _ = tpm2.FlushContext{FlushHandle: createRsp.ObjectHandle}.Execute(tpm)
-	}()
-
-	credential, err := tpm2.MakeCredential{
-		Handle:     createRsp.ObjectHandle,
-		ObjectName: akCreationResponse.Name,
-		Credential: akCreationResponse.CreationHash,
-	}.Execute(tpm)
-	if err != nil {
-		return tpm2.TPM2BDigest{}, fmt.Errorf("making credential for AK certificate: %w", err)
+		return nil, fmt.Errorf("parsing GCE AK public area: %w", err)
 	}
 
-	activationResponse, err := tpm2.ActivateCredential{
-		ActivateHandle: tpm2.NamedHandle{
-			Handle: akCreationResponse.ObjectHandle,
-			Name:   akCreationResponse.Name,
-		},
-		KeyHandle: tpm2.NamedHandle{
-			Handle: createRsp.ObjectHandle,
-			Name:   createRsp.Name,
-		},
-		CredentialBlob: credential.CredentialBlob,
-		Secret:         credential.Secret,
+	key := &TPM2Key{
+		handle: createRsp.ObjectHandle,
+		name:   createRsp.Name,
+		public: *outPublic,
+	}
+
+	certBytes, err := readNVIndexData(tpm, GceAKCertNVIndex)
+	if err == nil {
+		x509Cert, certErr := x509.ParseCertificate(certBytes)
+		if certErr != nil {
+			_, _ = tpm2.FlushContext{FlushHandle: createRsp.ObjectHandle}.Execute(tpm)
+			return nil, fmt.Errorf("failed to parse GCE AK certificate from NV memory: %w", certErr)
+		}
+		key.certificate = *x509Cert
+	}
+
+	return key, nil
+}
+
+func readNVIndexData(tpm transport.TPM, index uint32) ([]byte, error) {
+	readPubRsp, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(index)}.Execute(tpm)
+	if err != nil {
+		return nil, err
+	}
+
+	nvPublic, err := readPubRsp.NVPublic.Contents()
+	if err != nil {
+		return nil, err
+	}
+
+	capRsp, err := tpm2.GetCapability{
+		Capability:    tpm2.TPMCapTPMProperties,
+		Property:      uint32(tpm2.TPMPTNVBufferMax),
+		PropertyCount: 1,
 	}.Execute(tpm)
 	if err != nil {
-		return tpm2.TPM2BDigest{}, fmt.Errorf("activating credential for AK certificate: %w", err)
+		return nil, err
 	}
-	return activationResponse.CertInfo, nil
+
+	props, err := capRsp.CapabilityData.Data.TPMProperties()
+	if err != nil {
+		return nil, err
+	}
+	if len(props.TPMProperty) == 0 {
+		return nil, fmt.Errorf("TPM did not return NV buffer max property")
+	}
+
+	blockSize := int(props.TPMProperty[0].Value)
+	if blockSize <= 0 {
+		return nil, fmt.Errorf("invalid NV buffer max value: %d", blockSize)
+	}
+
+	outBuff := make([]byte, 0, int(nvPublic.DataSize))
+	for len(outBuff) < int(nvPublic.DataSize) {
+		readSize := blockSize
+		if remaining := int(nvPublic.DataSize) - len(outBuff); readSize > remaining {
+			readSize = remaining
+		}
+
+		readRsp, err := tpm2.NVRead{
+			AuthHandle: tpm2.AuthHandle{
+				Handle: tpm2.TPMRHOwner,
+				Name:   tpm2.HandleName(tpm2.TPMRHOwner),
+				Auth:   tpm2.PasswordAuth(nil),
+			},
+			NVIndex: tpm2.NamedHandle{
+				Handle: tpm2.TPMHandle(index),
+				Name:   readPubRsp.NVName,
+			},
+			Size:   uint16(readSize),
+			Offset: uint16(len(outBuff)),
+		}.Execute(tpm)
+		if err != nil {
+			return nil, err
+		}
+
+		outBuff = append(outBuff, readRsp.Data.Buffer...)
+	}
+
+	return outBuff, nil
 }
 
 func parseYaml(cmd *cobra.Command) error {
@@ -573,6 +647,7 @@ func init() {
 	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.DevicePath, "device", "d", "/dev/tpm0", "Path to the TPM device (e.g., /dev/tpm0)")
 	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.QuoteOutputPath, "quote-output", "q", "quote.bin", "Output file for the TPM quote")
 	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.QuoteSignatureOutputPath, "signature-output", "s", "quote.sig", "Output file for the TPM quote signature")
+	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.AttestationKeyType, "attestation-key-type", "t", "gce", "Type of attestation key to use (default: gce)")
 
 	tpmCmd.PersistentFlags().StringP("nonce", "n", "", "Nonce for the quote (hex string; default is random nonce for prove)")
 

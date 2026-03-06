@@ -156,17 +156,6 @@ var tpmProveCmd = &cobra.Command{
 		akName := akResponse.name
 		akCert := akResponse.certificate
 
-		if err := writeCertificatePEM(akCert, "ak_cert.pem"); err != nil {
-			return fmt.Errorf("writing AK certificate to PEM: %w", err)
-		}
-		fmt.Println("AK certificate written to ak_cert.pem")
-
-		// Save the AK public key in PEM format for easier verification in tests and other tools
-		if err := writeAKPublicKeyPEM(akResponse.public, "ak_pub.pem"); err != nil {
-			return fmt.Errorf("writing AK public key to PEM: %w", err)
-		}
-		fmt.Println("AK public key written to ak_pub.pem")
-
 		defer func() {
 			_, _ = tpm2.FlushContext{FlushHandle: akHandle}.Execute(tpm)
 		}()
@@ -704,26 +693,28 @@ func verifyArguments(cmd *cobra.Command) error {
 }
 
 func init() {
-	RootCmd.AddCommand(tpmCmd)
-	tpmCmd.AddCommand(tpmProveCmd)
-	tpmCmd.AddCommand(tpmVerifyCmd)
+	/*
+		RootCmd.AddCommand(tpmCmd)
+		tpmCmd.AddCommand(tpmProveCmd)
+		tpmCmd.AddCommand(tpmVerifyCmd)
 
-	// Common Flags
-	tpmCmd.PersistentFlags().StringVar(&tpmCmdFlags.PolicyFilePath, "policy", "", "Path to the policy file (YAML)")
+		// Common Flags
+		tpmCmd.PersistentFlags().StringVar(&tpmCmdFlags.PolicyFilePath, "policy", "", "Path to the policy file (YAML)")
 
-	// TPM Flags
-	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.DevicePath, "device", "d", "/dev/tpm0", "Path to the TPM device (e.g., /dev/tpm0)")
-	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.QuoteOutputPath, "quote-output", "q", "quote.bin", "Output file for the TPM quote")
-	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.QuoteSignatureOutputPath, "signature-output", "s", "quote.sig", "Output file for the TPM quote signature")
-	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.AttestationKeyType, "attestation-key-type", "t", "gce", "Type of attestation key to use (default: gce)")
+		// TPM Flags
+		tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.DevicePath, "device", "d", "/dev/tpm0", "Path to the TPM device (e.g., /dev/tpm0)")
+		tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.QuoteOutputPath, "quote-output", "q", "quote.bin", "Output file for the TPM quote")
+		tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.QuoteSignatureOutputPath, "signature-output", "s", "quote.sig", "Output file for the TPM quote signature")
+		tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.AttestationKeyType, "attestation-key-type", "t", "gce", "Type of attestation key to use (default: gce)")
 
-	tpmCmd.PersistentFlags().StringP("nonce", "n", "", "Nonce for the quote (hex string; default is random nonce for prove)")
+		tpmCmd.PersistentFlags().StringP("nonce", "n", "", "Nonce for the quote (hex string; default is random nonce for prove)")
 
-	// ZKP Flags
-	tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.ProofOutputPath, "proof-output", "p", "proof.json", "Output file for the ZKP proof")
+		// ZKP Flags
+		tpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.ProofOutputPath, "proof-output", "p", "proof.json", "Output file for the ZKP proof")
 
-	// ZKP Constraints
-	tpmCmd.PersistentFlags().Uint64Var(&tpmCmdFlags.Statement.MinimalFirmwareVersion, "min-firmware-version", 0, "Minimal firmware version constraint (inclusive this value)")
-	tpmCmd.PersistentFlags().BoolVar(&tpmCmdFlags.Statement.SecureBootEnabled, "secure-boot", false, "Secure boot enabled constraint (default to no requirement)")
-	tpmCmd.PersistentFlags().StringSliceVar(&tpmCmdFlags.Statement.KernelAllowList, "kernel-allowlist", []string{"all"}, "Kernel allow list constraint (default to allow all kernels, maximum size is 5)")
+		// ZKP Constraints
+		tpmCmd.PersistentFlags().Uint64Var(&tpmCmdFlags.Statement.MinimalFirmwareVersion, "min-firmware-version", 0, "Minimal firmware version constraint (inclusive this value)")
+		tpmCmd.PersistentFlags().BoolVar(&tpmCmdFlags.Statement.SecureBootEnabled, "secure-boot", false, "Secure boot enabled constraint (default to no requirement)")
+		tpmCmd.PersistentFlags().StringSliceVar(&tpmCmdFlags.Statement.KernelAllowList, "kernel-allowlist", []string{"all"}, "Kernel allow list constraint (default to allow all kernels, maximum size is 5)")
+	*/
 }

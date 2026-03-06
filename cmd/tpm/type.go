@@ -14,34 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package cmd
+package tpm
 
 import (
-	"os"
+	"crypto/x509"
 
-	"github.com/itsmeyaw/asta/cmd/tpm"
-	"github.com/spf13/cobra"
+	"github.com/google/go-tpm/tpm2"
 )
 
-type RootCmdFlags struct {
-	Verbose bool
-}
-
-var rootCmdFlags = &RootCmdFlags{}
-
-var RootCmd = &cobra.Command{
-	Use:   "asta",
-	Short: "Asta is a tool for Zero Knowledge Proof attestation for TEEs",
-}
-
-func Execute() {
-	err := RootCmd.Execute()
-	if err != nil {
-		os.Exit(1)
-	}
-}
-
-func init() {
-	RootCmd.AddCommand(tpm.TpmCmd)
-	RootCmd.PersistentFlags().BoolVarP(&rootCmdFlags.Verbose, "verbose", "v", false, "Enable verbose output")
+type TPM2Key struct {
+	handle      tpm2.TPMHandle
+	name        tpm2.TPM2BName
+	certificate x509.Certificate
+	public      tpm2.TPMTPublic
 }

@@ -167,6 +167,10 @@ var tpmVerifyQuoteCmd = &cobra.Command{
 	Use:   "quote",
 	Short: "Verify a TPM quote Zero Knowledge Proof against constraints",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := cmd.MarkFlagRequired("nonce"); err != nil {
+			return err
+		}
+
 		if nonce, err := util.ParseNonceFlag(cmd); err != nil {
 			return util.UsageError(cmd, err)
 		} else {

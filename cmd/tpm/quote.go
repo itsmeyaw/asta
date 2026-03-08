@@ -310,8 +310,4 @@ func getPCRCount(devicePath string) (uint16, error) {
 func init() {
 	tpmProveCmd.AddCommand(tpmProveQuoteCmd)
 	tpmVerifyCmd.AddCommand(tpmVerifyQuoteCmd)
-
-	if err := tpmVerifyQuoteCmd.MarkFlagRequired("nonce"); err != nil {
-		panic(err)
-	}
 }

@@ -54,7 +54,12 @@ type ZKPStatement struct {
 var zkpStatement = &ZKPStatement{}
 
 type TpmProveQuoteCmdFlags struct {
+	OutputQuotePath       string
+	OutputCertificatePath string
+	OutputSignaturePath   string
 }
+
+var tpmProveQuoteCmdFlags = &TpmProveQuoteCmdFlags{}
 
 var tpmProveQuoteCmd = &cobra.Command{
 	Use:   "quote",
@@ -118,11 +123,11 @@ var tpmProveQuoteCmd = &cobra.Command{
 			return fmt.Errorf("creating TPM quote: %w", err)
 		}
 
-		if tpmProveCmdFlags.OutputPath != "" {
-			if err := os.WriteFile(tpmProveCmdFlags.OutputPath, quote.Quoted.Bytes(), 0644); err != nil {
+		if tpmProveQuoteCmdFlags.OutputQuotePath != "" {
+			if err := os.WriteFile(tpmProveQuoteCmdFlags.OutputQuotePath, quote.Quoted.Bytes(), 0644); err != nil {
 				return fmt.Errorf("writing quote to file: %w", err)
 			}
-			fmt.Printf("Quote written to %s\n", tpmProveCmdFlags.OutputPath)
+			fmt.Printf("Quote written to %s\n", tpmProveQuoteCmdFlags.OutputQuotePath)
 		}
 
 		// Get signature from quote
@@ -131,12 +136,19 @@ var tpmProveQuoteCmd = &cobra.Command{
 			return fmt.Errorf("parsing quote signature: %w", err)
 		}
 
-		if tpmProveCmdFlags.OutputSignaturePath != "" {
+		if tpmProveQuoteCmdFlags.OutputSignaturePath != "" {
 			signatureBytes := append(signature.SignatureR.Buffer, signature.SignatureS.Buffer...)
-			if err := os.WriteFile(tpmProveCmdFlags.OutputSignaturePath, signatureBytes, 0644); err != nil {
+			if err := os.WriteFile(tpmProveQuoteCmdFlags.OutputSignaturePath, signatureBytes, 0644); err != nil {
 				return fmt.Errorf("writing quote signature to file: %w", err)
 			}
-			fmt.Printf("Quote signature written to %s\n", tpmProveCmdFlags.OutputSignaturePath)
+			fmt.Printf("Quote signature written to %s\n", tpmProveQuoteCmdFlags.OutputSignaturePath)
+		}
+
+		if tpmProveQuoteCmdFlags.OutputCertificatePath != "" {
+			if err := os.WriteFile(tpmProveQuoteCmdFlags.OutputCertificatePath, akCert.Raw, 0644); err != nil {
+				return fmt.Errorf("writing AK certificate to file: %w", err)
+			}
+			fmt.Printf("AK certificate written to %s\n", tpmProveQuoteCmdFlags.OutputCertificatePath)
 		}
 
 		// Execute circuit and generate proof file
@@ -315,5 +327,9 @@ func getPCRCount(devicePath string) (uint16, error) {
 
 func init() {
 	tpmProveCmd.AddCommand(tpmProveQuoteCmd)
+	tpmProveQuoteCmd.Flags().StringVarP(&tpmProveQuoteCmdFlags.OutputQuotePath, "quote-output", "q", "quote.bin", "Output file for the TPM attestation quote")
+	tpmProveQuoteCmd.Flags().StringVarP(&tpmProveQuoteCmdFlags.OutputSignaturePath, "signature-output", "s", "quote.sig", "Output file for the TPM quote signature")
+	tpmProveQuoteCmd.Flags().StringVarP(&tpmProveQuoteCmdFlags.OutputCertificatePath, "certificate-output", "c", "quote.crt", "Output file for the TPM attestation key certificate")
+
 	tpmVerifyCmd.AddCommand(tpmVerifyQuoteCmd)
 }

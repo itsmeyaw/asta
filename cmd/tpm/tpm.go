@@ -51,10 +51,6 @@ var TpmCmd = &cobra.Command{
 
 type TpmProveCmdFlags struct {
 	OutputPath string
-	// For debug only, the actual proof
-	// should not require certificate and signatures
-	OutputCertificatePath string
-	OutputSignaturePath   string
 }
 
 var tpmProveCmdFlags = &TpmProveCmdFlags{}
@@ -102,7 +98,6 @@ func generateSecureNonce() ([]byte, error) {
 
 func init() {
 	TpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.DevicePath, "device", "d", "/dev/tpm0", "Path to the TPM device (e.g., /dev/tpm0)")
-	TpmCmd.PersistentFlags().StringVarP(&tpmProveCmdFlags.OutputSignaturePath, "signature-output", "s", "quote.sig", "Output file for the TPM quote signature")
 	TpmCmd.PersistentFlags().StringVarP(&tpmCmdFlags.AttestationKeyType, "attestation-key-type", "t", "gce", "Type of attestation key to use (default: gce)")
 
 	TpmCmd.AddCommand(tpmProveCmd)

@@ -60,10 +60,12 @@ var tpmProveQuoteCmd = &cobra.Command{
 	Use:   "quote",
 	Short: "Perform TPM attestation and generate a Zero Knowledge Proof for the quote",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		if parsedNonce, err := util.ParseNonceFlag(cmd); err != nil {
-			return err
-		} else {
-			tpmCmdFlags.Nonce = parsedNonce
+		if cmd.Flags().Changed("nonce") {
+			if parsedNonce, err := util.ParseNonceFlag(cmd); err != nil {
+				return err
+			} else {
+				tpmCmdFlags.Nonce = parsedNonce
+			}
 		}
 
 		if len(tpmCmdFlags.Nonce) == 0 {

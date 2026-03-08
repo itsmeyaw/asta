@@ -92,7 +92,7 @@ func openTPM(devicePath string) (transport.TPMCloser, error) {
 }
 
 func generateSecureNonce() ([]byte, error) {
-	nonce := make([]byte, 16)
+	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}

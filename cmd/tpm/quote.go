@@ -76,6 +76,13 @@ var tpmProveQuoteCmd = &cobra.Command{
 			tpmCmdFlags.Nonce = nonce
 		}
 
+		// Pad the nonce to 32 bytes if it's shorter
+		if len(tpmCmdFlags.Nonce) < 32 {
+			paddedNonce := make([]byte, 32)
+			copy(paddedNonce, tpmCmdFlags.Nonce)
+			tpmCmdFlags.Nonce = paddedNonce
+		}
+
 		if err := verifyArguments(cmd); err != nil {
 			return util.UsageError(cmd, err)
 		}

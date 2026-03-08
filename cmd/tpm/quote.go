@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -57,6 +58,7 @@ type TpmProveQuoteCmdFlags struct {
 	OutputQuotePath       string
 	OutputCertificatePath string
 	OutputSignaturePath   string
+	PCRRegisters          []int
 }
 
 var tpmProveQuoteCmdFlags = &TpmProveQuoteCmdFlags{}
@@ -90,7 +92,7 @@ var tpmProveQuoteCmd = &cobra.Command{
 			tpmCmdFlags.Nonce = paddedNonce
 		}
 
-		if err := verifyArguments(cmd); err != nil {
+		if err := verifyGenericArguments(cmd); err != nil {
 			return util.UsageError(cmd, err)
 		}
 
@@ -118,7 +120,7 @@ var tpmProveQuoteCmd = &cobra.Command{
 		}()
 
 		// Get quote from TPM
-		quote, err := createTPMQuote(tpm, akHandle, akName)
+		quote, err := createTPMQuote(tpm, akHandle, akName, tpmProveQuoteCmdFlags.PCRRegisters)
 		if err != nil {
 			return fmt.Errorf("creating TPM quote: %w", err)
 		}
@@ -193,7 +195,7 @@ var tpmVerifyQuoteCmd = &cobra.Command{
 			return util.UsageError(cmd, fmt.Errorf("nonce must be provided either via command line or policy file"))
 		}
 
-		if err := verifyArguments(cmd); err != nil {
+		if err := verifyGenericArguments(cmd); err != nil {
 			return util.UsageError(cmd, err)
 		}
 
@@ -231,8 +233,8 @@ var tpmVerifyQuoteCmd = &cobra.Command{
 	},
 }
 
-func createTPMQuote(tpm transport.TPM, akHandle tpm2.TPMHandle, akName tpm2.TPM2BName) (*tpm2.QuoteResponse, error) {
-	pcrSelection, err := assignedPCRSelection(tpm)
+func createTPMQuote(tpm transport.TPM, akHandle tpm2.TPMHandle, akName tpm2.TPM2BName, selectedPCRRegisters []int) (*tpm2.QuoteResponse, error) {
+	pcrSelection, err := pcrSelectionForRegisters(tpm, selectedPCRRegisters)
 	if err != nil {
 		return nil, err
 	}
@@ -257,6 +259,64 @@ func createTPMQuote(tpm transport.TPM, akHandle tpm2.TPMHandle, akName tpm2.TPM2
 	}
 
 	return quoteRsp, nil
+}
+
+func pcrSelectionForRegisters(tpm transport.TPM, selectedPCRRegisters []int) (*tpm2.TPMLPCRSelection, error) {
+	assignedSelection, err := assignedPCRSelection(tpm)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(selectedPCRRegisters) == 0 {
+		return assignedSelection, nil
+	}
+
+	uniqueRegisters := make(map[int]struct{}, len(selectedPCRRegisters))
+	for _, pcrRegister := range selectedPCRRegisters {
+		if pcrRegister < 0 {
+			return nil, fmt.Errorf("PCR register must be >= 0 (got %d)", pcrRegister)
+		}
+		uniqueRegisters[pcrRegister] = struct{}{}
+	}
+
+	orderedRegisters := make([]int, 0, len(uniqueRegisters))
+	for pcrRegister := range uniqueRegisters {
+		orderedRegisters = append(orderedRegisters, pcrRegister)
+	}
+	sort.Ints(orderedRegisters)
+
+	filteredSelections := make([]tpm2.TPMSPCRSelection, 0, len(assignedSelection.PCRSelections))
+	for _, bankSelection := range assignedSelection.PCRSelections {
+		filteredPCRBytes := make([]byte, len(bankSelection.PCRSelect))
+		for _, pcrRegister := range orderedRegisters {
+			byteIndex := pcrRegister / 8
+			bitPosition := uint(pcrRegister % 8)
+			if byteIndex < len(filteredPCRBytes) {
+				filteredPCRBytes[byteIndex] |= 1 << bitPosition
+			}
+		}
+
+		hasAnyPCR := false
+		for i := range filteredPCRBytes {
+			filteredPCRBytes[i] &= bankSelection.PCRSelect[i]
+			if filteredPCRBytes[i] != 0 {
+				hasAnyPCR = true
+			}
+		}
+
+		if hasAnyPCR {
+			filteredSelections = append(filteredSelections, tpm2.TPMSPCRSelection{
+				Hash:      bankSelection.Hash,
+				PCRSelect: filteredPCRBytes,
+			})
+		}
+	}
+
+	if len(filteredSelections) == 0 {
+		return nil, fmt.Errorf("none of the selected PCR registers are available: %v", orderedRegisters)
+	}
+
+	return &tpm2.TPMLPCRSelection{PCRSelections: filteredSelections}, nil
 }
 
 func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement *ZKPStatement, akHandle tpm2.TPMHandle, akCert x509.Certificate) (QuoteProof, error) {
@@ -284,7 +344,7 @@ func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement *ZKPS
 	}, nil
 }
 
-func verifyArguments(cmd *cobra.Command) error {
+func verifyGenericArguments(cmd *cobra.Command) error {
 	if len(zkpStatement.KernelAllowList) > 5 {
 		return fmt.Errorf("kernel allow list cannot contain more than 5 entries")
 	}
@@ -296,6 +356,15 @@ func verifyArguments(cmd *cobra.Command) error {
 	pcrCount, err := getPCRCount(tpmCmdFlags.DevicePath)
 	if err != nil {
 		return fmt.Errorf("getting PCR count: %w", err)
+	}
+
+	for _, pcrRegister := range tpmProveQuoteCmdFlags.PCRRegisters {
+		if pcrRegister < 0 {
+			return fmt.Errorf("PCR register must be >= 0 (got %d)", pcrRegister)
+		}
+		if uint16(pcrRegister) >= pcrCount {
+			return fmt.Errorf("selected PCR register %d is out of bounds (max: %d)", pcrRegister, pcrCount-1)
+		}
 	}
 
 	for pcrIndex := range zkpStatement.PCRs {
@@ -322,7 +391,18 @@ func getPCRCount(devicePath string) (uint16, error) {
 		return 0, fmt.Errorf("parsing PCR capabilities: %w", err)
 	}
 
-	return uint16(len(pcrs.PCRSelections)), nil
+	maxPCRCount := 0
+	for _, selection := range pcrs.PCRSelections {
+		if bankPCRCount := len(selection.PCRSelect) * 8; bankPCRCount > maxPCRCount {
+			maxPCRCount = bankPCRCount
+		}
+	}
+
+	if maxPCRCount == 0 {
+		return 0, fmt.Errorf("TPM reported no selectable PCR registers")
+	}
+
+	return uint16(maxPCRCount), nil
 }
 
 func init() {
@@ -330,6 +410,8 @@ func init() {
 	tpmProveQuoteCmd.Flags().StringVarP(&tpmProveQuoteCmdFlags.OutputQuotePath, "quote-output", "q", "quote.bin", "Output file for the TPM attestation quote")
 	tpmProveQuoteCmd.Flags().StringVarP(&tpmProveQuoteCmdFlags.OutputSignaturePath, "signature-output", "s", "quote.sig", "Output file for the TPM quote signature")
 	tpmProveQuoteCmd.Flags().StringVarP(&tpmProveQuoteCmdFlags.OutputCertificatePath, "certificate-output", "c", "quote.crt", "Output file for the TPM attestation key certificate")
+	tpmProveQuoteCmd.Flags().IntSliceVarP(&tpmProveQuoteCmdFlags.PCRRegisters, "pcr-registers", "p", nil, "Comma-separated PCR register indices to include in quote (default: all available)")
 
 	tpmVerifyCmd.AddCommand(tpmVerifyQuoteCmd)
+	tpmVerifyQuoteCmd.Flags().String("nonce", "", "Hex-encoded nonce used in quote freshness validation (max 32 bytes)")
 }

@@ -43,9 +43,9 @@ const (
 
 type ZKPStatement struct {
 	MinimalFirmwareVersion uint64 `yaml:"minimal_firmware_version" json:"minimal_firmware_version"`
-	Nonce                  []byte `json:"nonce"`                    // Freshness nonce
-	ExpectedPCRHash        []byte `json:"expected_pcr_hash"`        // PCR digest from quote (32 bytes)
-	MinFirmwareVersionBE   []byte `json:"min_firmware_version_be"`  // Big-endian encoding (8 bytes)
+	Nonce                  []byte `json:"nonce"`                   // Freshness nonce
+	ExpectedPCRHash        []byte `json:"expected_pcr_hash"`       // PCR digest from quote (32 bytes)
+	MinFirmwareVersionBE   []byte `json:"min_firmware_version_be"` // Big-endian encoding (8 bytes)
 }
 
 // DebugProveInputs contains internal prover values, only included in debug mode
@@ -74,6 +74,7 @@ type TpmProveQuoteCmdFlags struct {
 	InputSignaturePath    string
 	InputCertificatePath  string
 	Debug                 bool
+	CircuitPath           string
 }
 
 var tpmProveQuoteCmdFlags = &TpmProveQuoteCmdFlags{}
@@ -175,7 +176,10 @@ var tpmProveQuoteCmd = &cobra.Command{
 }
 
 type TpmVerifyQuoteCmdFlags struct {
+	CircuitPath string
 }
+
+var tpmVerifyQuoteCmdFlags = &TpmVerifyQuoteCmdFlags{}
 
 var tpmVerifyQuoteCmd = &cobra.Command{
 	Use:   "quote",
@@ -244,10 +248,10 @@ var tpmVerifyQuoteCmd = &cobra.Command{
 		var pcrHash [32]byte
 		copy(pcrHash[:], quoteProof.Statement.ExpectedPCRHash)
 
-		// Generate circuit
-		circuit, err := libtpm2.GenerateCircuit()
+		// Load or generate circuit
+		circuit, err := loadOrGenerateCircuit(tpmVerifyQuoteCmdFlags.CircuitPath)
 		if err != nil {
-			return fmt.Errorf("generating ZKP circuit: %w", err)
+			return fmt.Errorf("loading ZKP circuit: %w", err)
 		}
 
 		// Run ZKP verifier
@@ -263,6 +267,35 @@ var tpmVerifyQuoteCmd = &cobra.Command{
 		}
 
 		fmt.Println("ZKP verification passed.")
+		return nil
+	},
+}
+
+var tpmCircuitCmd = &cobra.Command{
+	Use:   "circuit",
+	Short: "TPM ZK circuit operations",
+	Long:  "Commands for managing TPM ZK circuit generation",
+}
+
+var tpmCircuitGenerateCmd = &cobra.Command{
+	Use:   "generate <output-path>",
+	Short: "Generate and save the TPM ZK circuit to a file",
+	Long:  "Pre-generate the TPM ZK circuit and save it to a file for later use with prove/verify commands",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		outputPath := args[0]
+
+		fmt.Println("Generating TPM ZK circuit...")
+		circuit, err := libtpm2.GenerateCircuit()
+		if err != nil {
+			return fmt.Errorf("generating circuit: %w", err)
+		}
+
+		if err := os.WriteFile(outputPath, circuit, 0644); err != nil {
+			return fmt.Errorf("writing circuit to file: %w", err)
+		}
+
+		fmt.Printf("Circuit successfully generated and saved to %s\n", outputPath)
 		return nil
 	},
 }
@@ -314,6 +347,7 @@ func proveFromPreExtracted() (QuoteProof, error) {
 		pubKeyBytes[1+coordLen:],
 		zkpStatement,
 		tpmCmdFlags.Nonce,
+		tpmProveQuoteCmdFlags.CircuitPath,
 	)
 }
 
@@ -491,6 +525,7 @@ func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement *ZKPS
 		akPublicKey.Y.Buffer,
 		statement,
 		tpmCmdFlags.Nonce,
+		tpmProveQuoteCmdFlags.CircuitPath,
 	)
 }
 
@@ -502,6 +537,7 @@ func generateProveFromRawData(
 	akPubKeyY []byte,
 	statement *ZKPStatement,
 	nonce []byte,
+	circuitPath string,
 ) (QuoteProof, error) {
 	// Encode firmware version as 8-byte big-endian
 	var minFirmwareVersion [8]byte
@@ -519,10 +555,10 @@ func generateProveFromRawData(
 	pkX := new(big.Int).SetBytes(akPubKeyX).String()
 	pkY := new(big.Int).SetBytes(akPubKeyY).String()
 
-	// Generate circuit
-	circuit, err := libtpm2.GenerateCircuit()
+	// Load or generate circuit
+	circuit, err := loadOrGenerateCircuit(circuitPath)
 	if err != nil {
-		return QuoteProof{}, fmt.Errorf("generating ZKP circuit: %w", err)
+		return QuoteProof{}, fmt.Errorf("loading ZKP circuit: %w", err)
 	}
 
 	// Run the ZKP prover
@@ -578,6 +614,27 @@ func padLeft(b []byte, size int) []byte {
 	padded := make([]byte, size)
 	copy(padded[size-len(b):], b)
 	return padded
+}
+
+// loadOrGenerateCircuit loads a circuit from file if circuitPath is provided,
+// otherwise generates it on-demand.
+func loadOrGenerateCircuit(circuitPath string) ([]byte, error) {
+	if circuitPath == "" {
+		// Current behavior: generate on-demand
+		return libtpm2.GenerateCircuit()
+	}
+
+	// Load from file
+	circuitBytes, err := os.ReadFile(circuitPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading circuit file: %w", err)
+	}
+
+	if len(circuitBytes) == 0 {
+		return nil, fmt.Errorf("circuit file is empty: %s", circuitPath)
+	}
+
+	return circuitBytes, nil
 }
 
 func verifyZKPStatement() error {
@@ -647,7 +704,12 @@ func init() {
 	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.InputSignaturePath, "signature-input", "", "Path to pre-extracted quote signature file (64 bytes: R||S)")
 	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.InputCertificatePath, "certificate-input", "", "Path to pre-extracted AK certificate file (DER-encoded X.509)")
 	tpmProveQuoteCmd.Flags().BoolVar(&tpmProveQuoteCmdFlags.Debug, "debug", false, "Include debug inputs (quoted bytes, signature, AK public key) in proof output")
+	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.CircuitPath, "circuit", "", "Path to pre-generated circuit file (if not provided, circuit will be generated on-demand)")
 
 	tpmVerifyCmd.AddCommand(tpmVerifyQuoteCmd)
 	tpmVerifyQuoteCmd.Flags().String("nonce", "", "Hex-encoded nonce used in quote freshness validation (max 32 bytes)")
+	tpmVerifyQuoteCmd.Flags().StringVar(&tpmVerifyQuoteCmdFlags.CircuitPath, "circuit", "", "Path to pre-generated circuit file (if not provided, circuit will be generated on-demand)")
+
+	TpmCmd.AddCommand(tpmCircuitCmd)
+	tpmCircuitCmd.AddCommand(tpmCircuitGenerateCmd)
 }

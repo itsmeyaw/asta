@@ -41,25 +41,26 @@ const (
 	tpm2PCRDigestLen    = 32
 )
 
-type ProvePublicInputs struct {
-	Nonce              []byte `json:"nonce"`
-	SignatureR         []byte `json:"signature_r"`
-	SignatureS         []byte `json:"signature_s"`
-	MinFirmwareVersion []byte `json:"min_firmware_version"`
-	ExpectedPCRHash    []byte `json:"expected_pcr_hash"`
-	QuotedBytes        []byte `json:"quoted_bytes"`
+type ZKPStatement struct {
+	MinimalFirmwareVersion uint64 `yaml:"minimal_firmware_version" json:"minimal_firmware_version"`
+	Nonce                  []byte `json:"nonce"`                    // Freshness nonce
+	ExpectedPCRHash        []byte `json:"expected_pcr_hash"`        // PCR digest from quote (32 bytes)
+	MinFirmwareVersionBE   []byte `json:"min_firmware_version_be"`  // Big-endian encoding (8 bytes)
+}
+
+// DebugProveInputs contains internal prover values, only included in debug mode
+type DebugProveInputs struct {
+	QuotedBytes  []byte `json:"quoted_bytes"`    // Raw TPMS_ATTEST bytes
+	SignatureR   []byte `json:"signature_r"`     // ECDSA signature R component
+	SignatureS   []byte `json:"signature_s"`     // ECDSA signature S component
+	AKPublicKeyX []byte `json:"ak_public_key_x"` // AK public key X coordinate
+	AKPublicKeyY []byte `json:"ak_public_key_y"` // AK public key Y coordinate
 }
 
 type QuoteProof struct {
-	Proof        []byte            `json:"proof"`
-	AKPublicKeyX []byte            `json:"ak_public_key_x"` // Longfellow prove does not require the AK certificate, public key is enough
-	AKPublicKeyY []byte            `json:"ak_public_key_y"`
-	Statement    ZKPStatement      `json:"zkp_statement"`
-	PublicInputs ProvePublicInputs `json:"public_inputs"`
-}
-
-type ZKPStatement struct {
-	MinimalFirmwareVersion uint64 `yaml:"minimal_firmware_version" json:"minimal_firmware_version"`
+	Proof       []byte            `json:"proof"`
+	Statement   ZKPStatement      `json:"zkp_statement"`
+	DebugInputs *DebugProveInputs `json:"debug_inputs,omitempty"` // Only present in debug mode
 }
 
 var zkpStatement = &ZKPStatement{}
@@ -72,6 +73,7 @@ type TpmProveQuoteCmdFlags struct {
 	InputQuotePath        string
 	InputSignaturePath    string
 	InputCertificatePath  string
+	Debug                 bool
 }
 
 var tpmProveQuoteCmdFlags = &TpmProveQuoteCmdFlags{}
@@ -213,42 +215,34 @@ var tpmVerifyQuoteCmd = &cobra.Command{
 		}
 
 		// Verify nonce freshness against user-provided nonce
-		if !bytes.Equal(quoteProof.PublicInputs.Nonce, tpmCmdFlags.Nonce) {
+		if !bytes.Equal(quoteProof.Statement.Nonce, tpmCmdFlags.Nonce) {
 			return fmt.Errorf("nonce mismatch: proof contains a different nonce than provided")
 		}
 
-		// Verify nonce embedded in the TPMS_ATTEST quoted bytes
-		quoteAttest2B := tpm2.BytesAs2B[tpm2.TPMSAttest, *tpm2.TPMSAttest](quoteProof.PublicInputs.QuotedBytes)
-		quoteAttest, err := quoteAttest2B.Contents()
-		if err != nil {
-			return fmt.Errorf("parsing quote attestation data: %w", err)
+		// Validate statement fields
+		if len(quoteProof.Statement.Nonce) != 32 {
+			return fmt.Errorf("nonce must be 32 bytes, got %d", len(quoteProof.Statement.Nonce))
 		}
-		if !bytes.Equal(quoteAttest.ExtraData.Buffer, tpmCmdFlags.Nonce) {
-			return fmt.Errorf("quote nonce mismatch: expected %x, got %x", tpmCmdFlags.Nonce, quoteAttest.ExtraData.Buffer)
+		if len(quoteProof.Statement.ExpectedPCRHash) != 32 {
+			return fmt.Errorf("expected PCR hash must be 32 bytes, got %d", len(quoteProof.Statement.ExpectedPCRHash))
+		}
+		if len(quoteProof.Statement.MinFirmwareVersionBE) != 8 {
+			return fmt.Errorf("min firmware version BE must be 8 bytes, got %d", len(quoteProof.Statement.MinFirmwareVersionBE))
 		}
 
-		// Verify public inputs consistency with statement
+		// Verify consistency: MinFirmwareVersionBE should match MinimalFirmwareVersion
 		var expectedMinFW [8]byte
 		binary.BigEndian.PutUint64(expectedMinFW[:], quoteProof.Statement.MinimalFirmwareVersion)
-		if !bytes.Equal(quoteProof.PublicInputs.MinFirmwareVersion, expectedMinFW[:]) {
-			return fmt.Errorf("public inputs min_firmware_version does not match statement")
-		}
-
-		// Extract PCR digest from the quote to verify it matches public inputs
-		if len(quoteProof.PublicInputs.QuotedBytes) < tpm2PCRDigestOffset+tpm2PCRDigestLen {
-			return fmt.Errorf("quoted bytes too short to contain PCR digest")
-		}
-		quotePCRDigest := quoteProof.PublicInputs.QuotedBytes[tpm2PCRDigestOffset : tpm2PCRDigestOffset+tpm2PCRDigestLen]
-		if !bytes.Equal(quoteProof.PublicInputs.ExpectedPCRHash, quotePCRDigest) {
-			return fmt.Errorf("public inputs expected_pcr_hash does not match PCR digest in quote")
+		if !bytes.Equal(quoteProof.Statement.MinFirmwareVersionBE, expectedMinFW[:]) {
+			return fmt.Errorf("min_firmware_version_be does not match minimal_firmware_version")
 		}
 
 		// Prepare fixed-size arrays for the verifier
 		var minFirmwareVersion [8]byte
-		copy(minFirmwareVersion[:], quoteProof.PublicInputs.MinFirmwareVersion)
+		copy(minFirmwareVersion[:], quoteProof.Statement.MinFirmwareVersionBE)
 
 		var pcrHash [32]byte
-		copy(pcrHash[:], quoteProof.PublicInputs.ExpectedPCRHash)
+		copy(pcrHash[:], quoteProof.Statement.ExpectedPCRHash)
 
 		// Generate circuit
 		circuit, err := libtpm2.GenerateCircuit()
@@ -260,7 +254,7 @@ var tpmVerifyQuoteCmd = &cobra.Command{
 		if err := libtpm2.RunVerifier(
 			false, // useV7 must match the value used during proving
 			circuit,
-			quoteProof.PublicInputs.Nonce,
+			quoteProof.Statement.Nonce,
 			minFirmwareVersion,
 			pcrHash,
 			quoteProof.Proof,
@@ -548,20 +542,32 @@ func generateProveFromRawData(
 		return QuoteProof{}, fmt.Errorf("running ZKP prover: %w", err)
 	}
 
-	return QuoteProof{
-		Proof:        result.Proof,
-		Statement:    *statement,
-		AKPublicKeyX: akPubKeyX,
-		AKPublicKeyY: akPubKeyY,
-		PublicInputs: ProvePublicInputs{
-			Nonce:              nonce,
-			SignatureR:         sigR[:],
-			SignatureS:         sigS[:],
-			MinFirmwareVersion: minFirmwareVersion[:],
-			ExpectedPCRHash:    expectedPCRHash[:],
-			QuotedBytes:        quotedBytes,
-		},
-	}, nil
+	// Populate statement with computed values
+	stmt := ZKPStatement{
+		MinimalFirmwareVersion: statement.MinimalFirmwareVersion,
+		Nonce:                  nonce,
+		ExpectedPCRHash:        expectedPCRHash[:],
+		MinFirmwareVersionBE:   minFirmwareVersion[:],
+	}
+
+	// Build proof output
+	proof := QuoteProof{
+		Proof:     result.Proof,
+		Statement: stmt,
+	}
+
+	// Include debug inputs if debug mode is enabled
+	if tpmProveQuoteCmdFlags.Debug {
+		proof.DebugInputs = &DebugProveInputs{
+			QuotedBytes:  quotedBytes,
+			SignatureR:   sigR[:],
+			SignatureS:   sigS[:],
+			AKPublicKeyX: akPubKeyX,
+			AKPublicKeyY: akPubKeyY,
+		}
+	}
+
+	return proof, nil
 }
 
 // padLeft pads a byte slice with leading zeros to reach the target length.
@@ -640,6 +646,7 @@ func init() {
 	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.InputQuotePath, "quote-input", "", "Path to pre-extracted TPM quote file (TPMS_ATTEST bytes)")
 	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.InputSignaturePath, "signature-input", "", "Path to pre-extracted quote signature file (64 bytes: R||S)")
 	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.InputCertificatePath, "certificate-input", "", "Path to pre-extracted AK certificate file (DER-encoded X.509)")
+	tpmProveQuoteCmd.Flags().BoolVar(&tpmProveQuoteCmdFlags.Debug, "debug", false, "Include debug inputs (quoted bytes, signature, AK public key) in proof output")
 
 	tpmVerifyCmd.AddCommand(tpmVerifyQuoteCmd)
 	tpmVerifyQuoteCmd.Flags().String("nonce", "", "Hex-encoded nonce used in quote freshness validation (max 32 bytes)")

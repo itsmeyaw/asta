@@ -19,7 +19,6 @@ package tpm
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
@@ -36,12 +35,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type PCRAllowList struct {
-	Sha256 []string `yaml:"sha256" json:"sha256"`
-}
-
-// Mapping of each PCR index to its sha256 allowlist
-type PCRMap map[int]PCRAllowList
+const (
+	// TPMS_ATTEST structure offsets (from longfellow-zk/lib/circuits/tpm2_quote/tpm2_quote_constants.h)
+	tpm2PCRDigestOffset = 125
+	tpm2PCRDigestLen    = 32
+)
 
 type ProvePublicInputs struct {
 	Nonce              []byte `json:"nonce"`
@@ -61,10 +59,7 @@ type QuoteProof struct {
 }
 
 type ZKPStatement struct {
-	MinimalFirmwareVersion uint64   `yaml:"minimal_firmware_version" json:"minimal_firmware_version"`
-	SecureBootEnabled      bool     `yaml:"secure_boot_enabled" json:"secure_boot_enabled"`
-	KernelAllowList        []string `yaml:"kernel_allowlist" json:"kernel_allowlist"`
-	PCRs                   PCRMap   `yaml:"pcrs" json:"pcrs"`
+	MinimalFirmwareVersion uint64 `yaml:"minimal_firmware_version" json:"minimal_firmware_version"`
 }
 
 var zkpStatement = &ZKPStatement{}
@@ -239,12 +234,13 @@ var tpmVerifyQuoteCmd = &cobra.Command{
 			return fmt.Errorf("public inputs min_firmware_version does not match statement")
 		}
 
-		expectedPCRHash, err := computeExpectedPCRHash(quoteProof.Statement.PCRs)
-		if err != nil {
-			return fmt.Errorf("computing expected PCR hash: %w", err)
+		// Extract PCR digest from the quote to verify it matches public inputs
+		if len(quoteProof.PublicInputs.QuotedBytes) < tpm2PCRDigestOffset+tpm2PCRDigestLen {
+			return fmt.Errorf("quoted bytes too short to contain PCR digest")
 		}
-		if !bytes.Equal(quoteProof.PublicInputs.ExpectedPCRHash, expectedPCRHash[:]) {
-			return fmt.Errorf("public inputs expected_pcr_hash does not match statement")
+		quotePCRDigest := quoteProof.PublicInputs.QuotedBytes[tpm2PCRDigestOffset : tpm2PCRDigestOffset+tpm2PCRDigestLen]
+		if !bytes.Equal(quoteProof.PublicInputs.ExpectedPCRHash, quotePCRDigest) {
+			return fmt.Errorf("public inputs expected_pcr_hash does not match PCR digest in quote")
 		}
 
 		// Prepare fixed-size arrays for the verifier
@@ -517,11 +513,13 @@ func generateProveFromRawData(
 	var minFirmwareVersion [8]byte
 	binary.BigEndian.PutUint64(minFirmwareVersion[:], statement.MinimalFirmwareVersion)
 
-	// Compute expected PCR hash (SHA-256 over sorted PCR digests)
-	expectedPCRHash, err := computeExpectedPCRHash(statement.PCRs)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("computing expected PCR hash: %w", err)
+	// Extract PCR digest from the quote (at fixed offset 125, 32 bytes)
+	if len(quotedBytes) < tpm2PCRDigestOffset+tpm2PCRDigestLen {
+		return QuoteProof{}, fmt.Errorf("quote too short to contain PCR digest (need %d bytes, got %d)",
+			tpm2PCRDigestOffset+tpm2PCRDigestLen, len(quotedBytes))
 	}
+	var expectedPCRHash [32]byte
+	copy(expectedPCRHash[:], quotedBytes[tpm2PCRDigestOffset:tpm2PCRDigestOffset+tpm2PCRDigestLen])
 
 	// Convert AK public key coordinates to decimal strings for the C library
 	pkX := new(big.Int).SetBytes(akPubKeyX).String()
@@ -576,47 +574,8 @@ func padLeft(b []byte, size int) []byte {
 	return padded
 }
 
-// computeExpectedPCRHash computes the SHA-256 hash over the PCR allowlist
-// digests, sorted by PCR index. Each PCR's first SHA-256 entry is used.
-func computeExpectedPCRHash(pcrs PCRMap) ([32]byte, error) {
-	if len(pcrs) == 0 {
-		return [32]byte{}, nil
-	}
-
-	indices := make([]int, 0, len(pcrs))
-	for idx := range pcrs {
-		indices = append(indices, idx)
-	}
-	sort.Ints(indices)
-
-	h := sha256.New()
-	for _, idx := range indices {
-		allowlist := pcrs[idx]
-		if len(allowlist.Sha256) == 0 {
-			continue
-		}
-		digest, err := hex.DecodeString(allowlist.Sha256[0])
-		if err != nil {
-			return [32]byte{}, fmt.Errorf("decoding PCR %d SHA-256 digest: %w", idx, err)
-		}
-		h.Write(digest)
-	}
-
-	var result [32]byte
-	copy(result[:], h.Sum(nil))
-	return result, nil
-}
-
 func verifyZKPStatement() error {
-	if len(zkpStatement.KernelAllowList) > 5 {
-		return fmt.Errorf("kernel allow list cannot contain more than 5 entries")
-	}
-
-	for pcrIndex := range zkpStatement.PCRs {
-		if len(zkpStatement.PCRs[pcrIndex].Sha256) > 5 {
-			return fmt.Errorf("PCR %d allow list cannot contain more than 5 entries", pcrIndex)
-		}
-	}
+	// No additional validation needed - firmware version is a uint64
 	return nil
 }
 
@@ -640,12 +599,6 @@ func verifyGenericArguments(cmd *cobra.Command) error {
 		}
 		if uint16(pcrRegister) >= pcrCount {
 			return fmt.Errorf("selected PCR register %d is out of bounds (max: %d)", pcrRegister, pcrCount-1)
-		}
-	}
-
-	for pcrIndex := range zkpStatement.PCRs {
-		if uint16(pcrIndex) >= pcrCount {
-			return fmt.Errorf("PCR index %d is out of bounds (max: %d)", pcrIndex, pcrCount-1)
 		}
 	}
 	return nil

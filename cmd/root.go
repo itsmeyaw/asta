@@ -19,6 +19,9 @@ package cmd
 import (
 	"os"
 
+	"github.com/itsmeyaw/asta/cmd/collateral"
+	"github.com/itsmeyaw/asta/cmd/sevsnp"
+	"github.com/itsmeyaw/asta/cmd/tdx"
 	"github.com/itsmeyaw/asta/cmd/tpm"
 	"github.com/spf13/cobra"
 )
@@ -43,5 +46,8 @@ func Execute() {
 
 func init() {
 	RootCmd.AddCommand(tpm.TpmCmd)
+	RootCmd.AddCommand(tdx.TdxCmd)
+	RootCmd.AddCommand(sevsnp.SevSnpCmd)
+	RootCmd.AddCommand(collateral.CollateralCmd)
 	RootCmd.PersistentFlags().BoolVarP(&rootCmdFlags.Verbose, "verbose", "v", false, "Enable verbose output")
 }

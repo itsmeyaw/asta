@@ -17,10 +17,14 @@ limitations under the License.
 package sevsnp
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/itsmeyaw/herta/cmd/attest"
+	"github.com/itsmeyaw/herta/cmd/libsevsnp"
 )
 
 func TestQuoteCommandFlags(t *testing.T) {
@@ -73,5 +77,36 @@ func TestCollateralRefreshCommand(t *testing.T) {
 		if refreshCollateralCmd.Flags().Lookup(name) == nil {
 			t.Fatalf("collateral refresh is missing --%s", name)
 		}
+	}
+}
+
+func TestBenchmarkFixtureMatchesPolicy(t *testing.T) {
+	directory := filepath.Join("..", "..", "sample", "benchmark", "sev-snp")
+	policy, requirements, err := load(filepath.Join(directory, "policy.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, err := attest.ValidateCollateral(policy, libsevsnp.SerialBlocklistCapacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := makeStatement(policy, requirements, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := os.ReadFile(filepath.Join(directory, "quote.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vcekDER, err := os.ReadFile(filepath.Join(directory, "vcek.der"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vcek, err := x509.ParseCertificate(vcekDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkReport(report, vcek, statement); err != nil {
+		t.Fatal(err)
 	}
 }

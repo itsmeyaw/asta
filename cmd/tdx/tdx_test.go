@@ -20,6 +20,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/itsmeyaw/herta/cmd/attest"
+	"github.com/itsmeyaw/herta/cmd/libtdx"
 )
 
 func TestPCKCertificateAcceptsLeafOnlyQuoteChain(t *testing.T) {
@@ -29,6 +32,43 @@ func TestPCKCertificateAcceptsLeafOnlyQuoteChain(t *testing.T) {
 	}
 	if _, err := pckCertificate(quote); err != nil {
 		t.Fatalf("pckCertificate rejected fixture with leaf-only PCK chain: %v", err)
+	}
+}
+
+func TestExtractPCKChainAcceptsQuotePadding(t *testing.T) {
+	quote, err := os.ReadFile(filepath.Join("..", "..", "..", "libraries", "longfellow-zk-2", "lib", "circuits", "tdx_quote", "test_files", "tdx_quote.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, issuer, root, err := ExtractPCKChain(quote)
+	if err != nil {
+		t.Fatalf("ExtractPCKChain rejected fixture padding: %v", err)
+	}
+	if leaf == nil || issuer == nil || root == nil {
+		t.Fatal("ExtractPCKChain returned an incomplete chain")
+	}
+}
+
+func TestBenchmarkFixtureMatchesPolicy(t *testing.T) {
+	directory := filepath.Join("..", "..", "sample", "benchmark", "tdx")
+	policy, requirements, err := load(filepath.Join(directory, "policy.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, err := attest.ValidateCollateral(policy, libtdx.SerialBlocklistCapacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := makeStatement(policy, requirements, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote, err := os.ReadFile(filepath.Join(directory, "quote.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkQuote(quote, statement); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -1,0 +1,15 @@
+{
+  "platform": "sev-snp",
+  "retrieved": "2026-09-13T16:44:22Z",
+  "sources": {
+    "chain": "https://kdsintf.amd.com/vcek/v1/Milan/cert_chain",
+    "issuer_crl": "https://kdsintf.amd.com/vcek/v1/Milan/crl",
+    "vcek": "https://kdsintf.amd.com/vcek/v1/Milan/8b58e10b173a779e639942c598df3e386489f476a95d2a0387ecebd48bd3fe633845cd6f5bbcbc8a31d485af4d90390bfce07c08e5527b7b59918db6bb96d00e?blSPL=3\u0026teeSPL=0\u0026snpSPL=22\u0026ucodeSPL=209"
+  },
+  "sha256": {
+    "issuer.crl": "873efcf8c8cedc28c603cf50acdff8556a704658357a0d9daab297f483deb0df",
+    "issuer.der": "67d303bd3905fd38db8b20e0793699870e7fa612eaad5dec358293fd8c0bac1b",
+    "root.der": "69d063b45344d26a2e94e1f4210de49ef555308287d4c174445c95639a540bcd",
+    "vcek.der": "494861a594eab9629b7b2fb067081598f929916d5216456850b81dadbbc08b64"
+  }
+}

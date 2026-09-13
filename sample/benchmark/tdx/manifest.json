@@ -1,0 +1,15 @@
+{
+  "platform": "tdx",
+  "retrieved": "2026-09-13T16:45:02Z",
+  "sources": {
+    "issuer_crl": "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der",
+    "leaf_crl": "https://api.trustedservices.intel.com/sgx/certification/v4/pckcrl?ca=platform\u0026encoding=der"
+  },
+  "sha256": {
+    "issuer.crl": "c114be5d5ca7aab2d37817eca55aa8a2353853809904ff3695b31c26bcb7465b",
+    "issuer.der": "22eb770dca215b607b5ccfc21a672b1da5cc660b1ad0365020567979edcaa0e1",
+    "leaf.crl": "1c1ea190de5cb25b183912e5b6c5a851da64ba46e7f901a754d3a5abb29a8dfa",
+    "pck.der": "8b97d6fa29c402854b58ad842eb441f44b43cc601cdd013bfea6479d50a5bd61",
+    "root.der": "44a0196b2b99f889b8e149e95b807a350e7424964399e885a7cbb8ccfab674d3"
+  }
+}

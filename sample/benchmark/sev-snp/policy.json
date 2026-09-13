@@ -1,0 +1,33 @@
+{
+  "profile": "longfellow-sev-snp-milan-vcek-v4",
+  "spec_version": 6,
+  "verification_time": "20260913160000Z",
+  "requirements": {
+    "min_guest_svn": "00000000",
+    "policy": "0000030000000000",
+    "family_id": "00000000000000000000000000000000",
+    "image_id": "00000000000000000000000000000000",
+    "vmpl": 0,
+    "min_current_tcb": "03000000000016d1",
+    "platform_info": "0100000000000000",
+    "nonce": "a84c0bb93c587896926f7f1d18d7e7ee61909231f195ff1394723d3177d6517cad2c52d3fbb42016b068a3fca39c4373478c7ca97851eda4d6c25a16a0c202cf",
+    "measurement": "845f8680d7f810d6ee410706d1c845aeb83d18e9a30f59d1b519a7b2e2f2670aab3982a20fec61a85b6771922f44945b",
+    "host_data": "0000000000000000000000000000000000000000000000000000000000000000",
+    "id_key_digest": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "author_key_digest": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "report_id": "0a207b894c7973d08b953ae734ff27229b4869deda01183676611313ecebefa5",
+    "report_id_ma": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "min_bootloader_svn": 3,
+    "min_tee_svn": 0,
+    "min_snp_svn": 22,
+    "min_microcode_svn": 209,
+    "min_committed_tcb": "03000000000016d1",
+    "min_launch_tcb": "03000000000016d1"
+  },
+  "collateral": {
+    "issuer_certificate": "issuer.der",
+    "trusted_root": "root.der",
+    "issuer_crl": "issuer.crl",
+    "leaf_crl": ""
+  }
+}

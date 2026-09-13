@@ -1,0 +1,12 @@
+{
+  "platform": "gcp",
+  "retrieved": "2026-09-13T16:44:21Z",
+  "sources": {
+    "issuer": "https://privateca-content-65d1688e-0000-2203-850e-30fd381456f8.storage.googleapis.com/810af313406ad3e2079b/ca.crt"
+  },
+  "sha256": {
+    "ak.der": "f90f54fc8adfcd7b41713235df785c40efff61386ca59e3e20b303397bcf4dd3",
+    "issuer.der": "02f507068014de60d15fee5901513a03040baa922143143bc50288b55b24bceb",
+    "root.der": "594759594b9b61524f6c8ef668f7177f7b9066bc0674f2f49fe9e052be78beb2"
+  }
+}

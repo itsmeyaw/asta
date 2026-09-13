@@ -30,6 +30,7 @@ import "C"
 
 import (
 	"fmt"
+	"time"
 	"unsafe"
 )
 
@@ -101,7 +102,11 @@ func Prove(circuit []byte, statement Statement, quote []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	verificationTime := C.CString(string(statement.VerificationTime))
+	utcTime, err := tdxVerificationTime(statement.VerificationTime)
+	if err != nil {
+		return nil, err
+	}
+	verificationTime := C.CString(utcTime)
 	defer C.free(unsafe.Pointer(verificationTime))
 	var proof *C.uint8_t
 	var proofLen C.size_t
@@ -134,7 +139,11 @@ func Verify(circuit []byte, statement Statement, proof []byte) error {
 	if err != nil {
 		return err
 	}
-	verificationTime := C.CString(string(statement.VerificationTime))
+	utcTime, err := tdxVerificationTime(statement.VerificationTime)
+	if err != nil {
+		return err
+	}
+	verificationTime := C.CString(utcTime)
 	defer C.free(unsafe.Pointer(verificationTime))
 	rc := C.run_tdx_quote_verifier(
 		spec, bytesPointer(circuit), C.size_t(len(circuit)),
@@ -181,6 +190,17 @@ func validate(circuit []byte, statement Statement, variableInput []byte) error {
 		return fmt.Errorf("serial blocklist must contain %d entries", SerialBlocklistCapacity)
 	}
 	return nil
+}
+
+func tdxVerificationTime(value []byte) (string, error) {
+	parsed, err := time.Parse("20060102150405Z", string(value))
+	if err != nil {
+		return "", fmt.Errorf("invalid TDX verification time: %w", err)
+	}
+	if parsed.Year() < 1950 || parsed.Year() > 2049 {
+		return "", fmt.Errorf("TDX verification time year %d is outside the UTCTime range 1950-2049", parsed.Year())
+	}
+	return parsed.Format("060102150405Z"), nil
 }
 
 func bytesPointer(value []byte) *C.uint8_t { return (*C.uint8_t)(unsafe.Pointer(&value[0])) }

@@ -352,7 +352,7 @@ func parseQuote(raw []byte) (*pckChain, error) {
 	}
 	issuer, remaining := pem.Decode(remaining)
 	root, remaining := pem.Decode(remaining)
-	if issuer == nil || root == nil || len(remaining) != 0 || issuer.Type != "CERTIFICATE" || root.Type != "CERTIFICATE" {
+	if issuer == nil || root == nil || len(bytes.Trim(remaining, "\x00 \t\r\n")) != 0 || issuer.Type != "CERTIFICATE" || root.Type != "CERTIFICATE" {
 		return nil, fmt.Errorf("TDX quote must contain exactly three PEM PCK certificates")
 	}
 	issuerCert, err := x509.ParseCertificate(issuer.Bytes)

@@ -214,11 +214,7 @@ func validateCollateral(policy Policy, capacity int) (Trust, *x509.Certificate, 
 	blocklist := make([]byte, capacity*20)
 	active := 0
 	var leafCRL *x509.RevocationList
-	if policy.Collateral.LeafCRL == "" {
-		if policy.Profile != "longfellow-sev-snp-milan-vcek-v4" {
-			return Trust{}, nil, nil, fmt.Errorf("leaf CRL is required for profile %s", policy.Profile)
-		}
-	} else {
+	if policy.Collateral.LeafCRL != "" {
 		leafCRL, err = util.ReadCRL(policy.Collateral.LeafCRL)
 		if err != nil {
 			return Trust{}, nil, nil, fmt.Errorf("reading leaf CRL: %w", err)

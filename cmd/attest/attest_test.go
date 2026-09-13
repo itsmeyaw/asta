@@ -78,7 +78,7 @@ func TestValidateTrustBuildsCanonicalBlocklist(t *testing.T) {
 	}
 }
 
-func TestValidateTrustAllowsSNPMissingLeafCRL(t *testing.T) {
+func TestValidateTrustAllowsMissingLeafCRL(t *testing.T) {
 	fixed := time.Date(2026, time.September, 10, 17, 0, 0, 0, time.UTC)
 	root, rootKey := testCertificate(t, nil, nil, 1, true, fixed)
 	issuer, issuerKey := testCertificate(t, root, rootKey, 2, true, fixed)
@@ -93,7 +93,7 @@ func TestValidateTrustAllowsSNPMissingLeafCRL(t *testing.T) {
 		}
 	}
 	trust, err := ValidateTrust(Policy{
-		Profile:          "longfellow-sev-snp-milan-vcek-v4",
+		Profile:          "test",
 		SpecVersion:      6,
 		VerificationTime: fixed.Format(VerificationTimeLayout),
 		Collateral:       Collateral{IssuerCertificate: issuerPath, TrustedRoot: rootPath, IssuerCRL: crlPath},

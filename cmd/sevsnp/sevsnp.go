@@ -28,8 +28,8 @@ import (
 	sevabi "github.com/google/go-sev-guest/abi"
 	"github.com/google/go-sev-guest/kds"
 	sevverify "github.com/google/go-sev-guest/verify"
-	"github.com/itsmeyaw/asta/cmd/attest"
-	"github.com/itsmeyaw/asta/cmd/libsevsnp"
+	"github.com/itsmeyaw/herta/cmd/attest"
+	"github.com/itsmeyaw/herta/cmd/libsevsnp"
 	"github.com/spf13/cobra"
 )
 

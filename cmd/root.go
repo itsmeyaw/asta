@@ -19,15 +19,15 @@ package cmd
 import (
 	"os"
 
-	"github.com/itsmeyaw/asta/cmd/sevsnp"
-	"github.com/itsmeyaw/asta/cmd/tdx"
-	"github.com/itsmeyaw/asta/cmd/tpm"
+	"github.com/itsmeyaw/herta/cmd/sevsnp"
+	"github.com/itsmeyaw/herta/cmd/tdx"
+	"github.com/itsmeyaw/herta/cmd/tpm"
 	"github.com/spf13/cobra"
 )
 
 var RootCmd = &cobra.Command{
-	Use:   "asta",
-	Short: "Asta is a tool for Zero Knowledge Proof attestation for TEEs",
+	Use:   "herta",
+	Short: "Herta is a tool for Zero Knowledge Proof attestation for TEEs",
 }
 
 func Execute() {

@@ -25,8 +25,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/itsmeyaw/asta/cmd/attest"
-	"github.com/itsmeyaw/asta/cmd/libtpm2"
+	"github.com/itsmeyaw/herta/cmd/attest"
+	"github.com/itsmeyaw/herta/cmd/libtpm2"
 	"github.com/spf13/cobra"
 )
 

@@ -18,6 +18,12 @@ package cmd
 
 import "testing"
 
+func TestRootCommandName(t *testing.T) {
+	if RootCmd.Name() != "herta" {
+		t.Fatalf("root command name = %q, want herta", RootCmd.Name())
+	}
+}
+
 func TestCollateralRefreshCommandsArePlatformLocal(t *testing.T) {
 	for _, path := range [][]string{{"tpm", "collateral", "refresh"}, {"tdx", "collateral", "refresh"}, {"sev-snp", "collateral", "refresh"}} {
 		command, _, err := RootCmd.Find(path)

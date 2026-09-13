@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/itsmeyaw/asta/cmd/util"
+	"github.com/itsmeyaw/herta/cmd/util"
 	"github.com/spf13/cobra"
 )
 

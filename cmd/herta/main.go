@@ -16,7 +16,7 @@ limitations under the License.
 
 package main
 
-import "github.com/itsmeyaw/asta/cmd"
+import "github.com/itsmeyaw/herta/cmd"
 
 func main() {
 	cmd.Execute()

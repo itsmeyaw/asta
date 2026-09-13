@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/itsmeyaw/asta/cmd/util"
+	"github.com/itsmeyaw/herta/cmd/util"
 )
 
 const VerificationTimeLayout = "20060102150405Z"

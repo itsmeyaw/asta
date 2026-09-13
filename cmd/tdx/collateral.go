@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/google/go-tdx-guest/pcs"
-	"github.com/itsmeyaw/asta/cmd/util"
+	"github.com/itsmeyaw/herta/cmd/util"
 	"github.com/spf13/cobra"
 )
 

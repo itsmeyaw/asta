@@ -28,8 +28,8 @@ import (
 	tdxabi "github.com/google/go-tdx-guest/abi"
 	"github.com/google/go-tdx-guest/pcs"
 	tdxpb "github.com/google/go-tdx-guest/proto/tdx"
-	"github.com/itsmeyaw/asta/cmd/attest"
-	"github.com/itsmeyaw/asta/cmd/libtdx"
+	"github.com/itsmeyaw/herta/cmd/attest"
+	"github.com/itsmeyaw/herta/cmd/libtdx"
 	"github.com/spf13/cobra"
 )
 

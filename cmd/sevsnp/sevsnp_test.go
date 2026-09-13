@@ -20,7 +20,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/itsmeyaw/asta/cmd/attest"
+	"github.com/itsmeyaw/herta/cmd/attest"
 )
 
 func TestQuoteCommandFlags(t *testing.T) {

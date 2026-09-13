@@ -1,4 +1,4 @@
-module github.com/itsmeyaw/asta/cmd
+module github.com/itsmeyaw/herta/cmd
 
 go 1.25.0
 

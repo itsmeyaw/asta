@@ -1,3 +1,19 @@
+/*
+Copyright 2026 Yudhisitra Arief Wibowo
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package tdx
 
 import (
@@ -64,9 +80,11 @@ var verifyQuoteFlags struct {
 	input, policy, circuit string
 }
 
-var TdxCmd = &cobra.Command{Use: "tdx", Short: "Intel TDX quote proofs"}
-var proveCmd = &cobra.Command{Use: "prove", Short: "Generate a TDX quote proof"}
-var verifyCmd = &cobra.Command{Use: "verify", Short: "Verify a TDX quote proof"}
+var (
+	TdxCmd    = &cobra.Command{Use: "tdx", Short: "Intel TDX quote proofs"}
+	proveCmd  = &cobra.Command{Use: "prove", Short: "Generate a TDX quote proof"}
+	verifyCmd = &cobra.Command{Use: "verify", Short: "Verify a TDX quote proof"}
+)
 
 var proveQuoteCmd = &cobra.Command{Use: "quote", Short: "Prove a TDX quote", RunE: func(*cobra.Command, []string) error { return proveQuote() }}
 
@@ -194,12 +212,14 @@ func load(path string) (attest.Policy, requirements, error) {
 	}
 	return p, r, nil
 }
+
 func circuitFor(path string, version int) ([]byte, error) {
 	if path != "" {
 		return os.ReadFile(path)
 	}
 	return libtdx.GenerateCircuit(version)
 }
+
 func fixed(value string, size int) ([]byte, error) {
 	b, err := hex.DecodeString(value)
 	if err != nil || len(b) != size {
@@ -207,6 +227,7 @@ func fixed(value string, size int) ([]byte, error) {
 	}
 	return b, nil
 }
+
 func makeStatement(p attest.Policy, r requirements, trust attest.Trust) (statement, error) {
 	fields := []struct {
 		value string
@@ -228,6 +249,7 @@ func makeStatement(p attest.Policy, r requirements, trust attest.Trust) (stateme
 	}
 	return statement{p.SpecVersion, r, trust.IssuerSPKI, trust.VerificationTime, trust.SerialBlocklist, trust.ActiveBlocklistSize}, nil
 }
+
 func toLib(s statement) libtdx.Statement {
 	r := s.Requirements
 	var out libtdx.Statement
@@ -262,6 +284,7 @@ func sameStatement(a, b statement) bool {
 	br, _ := json.Marshal(b.Requirements)
 	return a.Version == b.Version && bytes.Equal(ar, br) && bytes.Equal(a.IssuerSPKI, b.IssuerSPKI) && bytes.Equal(a.VerificationTime, b.VerificationTime) && bytes.Equal(a.SerialBlocklist, b.SerialBlocklist) && a.ActiveSerials == b.ActiveSerials
 }
+
 func checkQuote(q []byte, s statement) error {
 	if _, err := parseQuote(q); err != nil {
 		return err
@@ -277,6 +300,7 @@ func checkQuote(q []byte, s statement) error {
 	}
 	return nil
 }
+
 func pckCertificate(q []byte) (*x509.Certificate, error) {
 	chainData, err := pckChainData(q)
 	if err != nil {
@@ -301,6 +325,7 @@ func pckChainData(raw []byte) ([]byte, error) {
 	}
 	return chainData, nil
 }
+
 func parsePCKLeaf(chainData []byte) (*x509.Certificate, []byte, error) {
 	leaf, remaining := pem.Decode(chainData)
 	if leaf == nil || leaf.Type != "CERTIFICATE" {
@@ -315,6 +340,7 @@ func parsePCKLeaf(chainData []byte) (*x509.Certificate, []byte, error) {
 	}
 	return leafCert, remaining, nil
 }
+
 func parseQuote(raw []byte) (*pckChain, error) {
 	chainData, err := pckChainData(raw)
 	if err != nil {

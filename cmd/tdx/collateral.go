@@ -1,3 +1,19 @@
+/*
+Copyright 2026 Yudhisitra Arief Wibowo
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package tdx
 
 import (
@@ -18,74 +34,76 @@ var refreshCollateralFlags struct {
 	quote, root, output string
 }
 
-var collateralCmd = &cobra.Command{Use: "collateral", Short: "TDX verifier collateral operations"}
-var refreshCollateralCmd = &cobra.Command{Use: "refresh", Short: "Refresh Intel TDX collateral", RunE: func(*cobra.Command, []string) error {
-	quote, err := os.ReadFile(refreshCollateralFlags.quote)
-	if err != nil {
-		return fmt.Errorf("reading quote: %w", err)
-	}
-	leaf, issuer, root, err := ExtractPCKChain(quote)
-	if err != nil {
-		return err
-	}
-	trustedRoot, err := util.ReadCertificate(refreshCollateralFlags.root)
-	if err != nil {
-		return fmt.Errorf("reading trusted root: %w", err)
-	}
-	if !bytes.Equal(root.Raw, trustedRoot.Raw) {
-		return fmt.Errorf("TDX quote root does not match --trust-root")
-	}
-	if err := leaf.CheckSignatureFrom(issuer); err != nil {
-		return fmt.Errorf("validating PCK certificate: %w", err)
-	}
-	if err := issuer.CheckSignatureFrom(root); err != nil {
-		return fmt.Errorf("validating PCK issuer: %w", err)
-	}
-	var ca string
-	switch issuer.Subject.CommonName {
-	case "Intel SGX PCK Platform CA":
-		ca = "platform"
-	case "Intel SGX PCK Processor CA":
-		ca = "processor"
-	default:
-		return fmt.Errorf("unsupported PCK issuer %q", issuer.Subject.CommonName)
-	}
-	leafURL := pcs.PckCrlURL(ca)
-	issuerURL, err := onlyCRLURL(root)
-	if err != nil {
-		return err
-	}
-	leafCRL, headers, err := util.FetchWithHeaders(leafURL)
-	if err != nil {
-		return err
-	}
-	crlIssuer, crlRoot, err := parseIssuerChain(headers.Values("Sgx-Pck-Crl-Issuer-Chain"))
-	if err != nil {
-		return fmt.Errorf("parsing Intel PCK CRL issuer chain: %w", err)
-	}
-	if !bytes.Equal(crlIssuer.Raw, issuer.Raw) || !bytes.Equal(crlRoot.Raw, root.Raw) {
-		return fmt.Errorf("Intel PCK CRL issuer chain does not match quote chain")
-	}
-	issuerCRL, err := util.Fetch(issuerURL)
-	if err != nil {
-		return err
-	}
-	parsedLeafCRL, err := x509.ParseRevocationList(leafCRL)
-	if err != nil {
-		return fmt.Errorf("parsing PCK CRL: %w", err)
-	}
-	if err := util.ValidateCRL(parsedLeafCRL, issuer, time.Now()); err != nil {
-		return fmt.Errorf("validating PCK CRL: %w", err)
-	}
-	parsedIssuerCRL, err := x509.ParseRevocationList(issuerCRL)
-	if err != nil {
-		return fmt.Errorf("parsing root CRL: %w", err)
-	}
-	if err := util.ValidateCRL(parsedIssuerCRL, root, time.Now()); err != nil {
-		return fmt.Errorf("validating root CRL: %w", err)
-	}
-	return util.WriteSnapshot(refreshCollateralFlags.output, "tdx", map[string][]byte{"pck.der": leaf.Raw, "issuer.der": issuer.Raw, "root.der": root.Raw, "leaf.crl": leafCRL, "issuer.crl": issuerCRL}, map[string]string{"leaf_crl": leafURL, "issuer_crl": issuerURL})
-}}
+var (
+	collateralCmd        = &cobra.Command{Use: "collateral", Short: "TDX verifier collateral operations"}
+	refreshCollateralCmd = &cobra.Command{Use: "refresh", Short: "Refresh Intel TDX collateral", RunE: func(*cobra.Command, []string) error {
+		quote, err := os.ReadFile(refreshCollateralFlags.quote)
+		if err != nil {
+			return fmt.Errorf("reading quote: %w", err)
+		}
+		leaf, issuer, root, err := ExtractPCKChain(quote)
+		if err != nil {
+			return err
+		}
+		trustedRoot, err := util.ReadCertificate(refreshCollateralFlags.root)
+		if err != nil {
+			return fmt.Errorf("reading trusted root: %w", err)
+		}
+		if !bytes.Equal(root.Raw, trustedRoot.Raw) {
+			return fmt.Errorf("TDX quote root does not match --trust-root")
+		}
+		if err := leaf.CheckSignatureFrom(issuer); err != nil {
+			return fmt.Errorf("validating PCK certificate: %w", err)
+		}
+		if err := issuer.CheckSignatureFrom(root); err != nil {
+			return fmt.Errorf("validating PCK issuer: %w", err)
+		}
+		var ca string
+		switch issuer.Subject.CommonName {
+		case "Intel SGX PCK Platform CA":
+			ca = "platform"
+		case "Intel SGX PCK Processor CA":
+			ca = "processor"
+		default:
+			return fmt.Errorf("unsupported PCK issuer %q", issuer.Subject.CommonName)
+		}
+		leafURL := pcs.PckCrlURL(ca)
+		issuerURL, err := onlyCRLURL(root)
+		if err != nil {
+			return err
+		}
+		leafCRL, headers, err := util.FetchWithHeaders(leafURL)
+		if err != nil {
+			return err
+		}
+		crlIssuer, crlRoot, err := parseIssuerChain(headers.Values("Sgx-Pck-Crl-Issuer-Chain"))
+		if err != nil {
+			return fmt.Errorf("parsing Intel PCK CRL issuer chain: %w", err)
+		}
+		if !bytes.Equal(crlIssuer.Raw, issuer.Raw) || !bytes.Equal(crlRoot.Raw, root.Raw) {
+			return fmt.Errorf("Intel PCK CRL issuer chain does not match quote chain")
+		}
+		issuerCRL, err := util.Fetch(issuerURL)
+		if err != nil {
+			return err
+		}
+		parsedLeafCRL, err := x509.ParseRevocationList(leafCRL)
+		if err != nil {
+			return fmt.Errorf("parsing PCK CRL: %w", err)
+		}
+		if err := util.ValidateCRL(parsedLeafCRL, issuer, time.Now()); err != nil {
+			return fmt.Errorf("validating PCK CRL: %w", err)
+		}
+		parsedIssuerCRL, err := x509.ParseRevocationList(issuerCRL)
+		if err != nil {
+			return fmt.Errorf("parsing root CRL: %w", err)
+		}
+		if err := util.ValidateCRL(parsedIssuerCRL, root, time.Now()); err != nil {
+			return fmt.Errorf("validating root CRL: %w", err)
+		}
+		return util.WriteSnapshot(refreshCollateralFlags.output, "tdx", map[string][]byte{"pck.der": leaf.Raw, "issuer.der": issuer.Raw, "root.der": root.Raw, "leaf.crl": leafCRL, "issuer.crl": issuerCRL}, map[string]string{"leaf_crl": leafURL, "issuer_crl": issuerURL})
+	}}
+)
 
 func init() {
 	TdxCmd.AddCommand(collateralCmd)

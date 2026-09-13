@@ -20,8 +20,10 @@ import "github.com/spf13/cobra"
 
 var TpmCmd = &cobra.Command{Use: "tpm", Short: "TPM quote proof commands"}
 
-var tpmProveCmd = &cobra.Command{Use: "prove", Short: "Generate a TPM quote proof"}
-var tpmVerifyCmd = &cobra.Command{Use: "verify", Short: "Verify a TPM quote proof"}
+var (
+	tpmProveCmd  = &cobra.Command{Use: "prove", Short: "Generate a TPM quote proof"}
+	tpmVerifyCmd = &cobra.Command{Use: "verify", Short: "Verify a TPM quote proof"}
+)
 
 func init() {
 	TpmCmd.AddCommand(tpmProveCmd, tpmVerifyCmd)

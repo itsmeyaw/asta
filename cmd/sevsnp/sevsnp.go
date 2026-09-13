@@ -1,3 +1,19 @@
+/*
+Copyright 2026 Yudhisitra Arief Wibowo
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package sevsnp
 
 import (
@@ -65,11 +81,13 @@ var proveQuoteFlags struct {
 var verifyQuoteFlags struct {
 	input, policy, circuit string
 }
-var SevSnpCmd = &cobra.Command{Use: "sev-snp", Short: "AMD Milan SEV-SNP quote proofs"}
-var proveCmd = &cobra.Command{Use: "prove", Short: "Generate an SEV-SNP quote proof"}
-var verifyCmd = &cobra.Command{Use: "verify", Short: "Verify an SEV-SNP quote proof"}
-var circuitCmd = &cobra.Command{Use: "circuit", Short: "SEV-SNP circuit operations"}
-var proveQuoteCmd = &cobra.Command{Use: "quote", Short: "Prove an SEV-SNP quote", RunE: func(*cobra.Command, []string) error { return proveQuote() }}
+var (
+	SevSnpCmd     = &cobra.Command{Use: "sev-snp", Short: "AMD Milan SEV-SNP quote proofs"}
+	proveCmd      = &cobra.Command{Use: "prove", Short: "Generate an SEV-SNP quote proof"}
+	verifyCmd     = &cobra.Command{Use: "verify", Short: "Verify an SEV-SNP quote proof"}
+	circuitCmd    = &cobra.Command{Use: "circuit", Short: "SEV-SNP circuit operations"}
+	proveQuoteCmd = &cobra.Command{Use: "quote", Short: "Prove an SEV-SNP quote", RunE: func(*cobra.Command, []string) error { return proveQuote() }}
+)
 
 var verifyQuoteCmd = &cobra.Command{Use: "quote", Short: "Verify an SEV-SNP quote proof", RunE: func(*cobra.Command, []string) error { return verifyQuote() }}
 
@@ -186,6 +204,7 @@ func verifyQuote() error {
 	}
 	return libsevsnp.Verify(c, toLib(want), proof.Proof)
 }
+
 func load(path string) (attest.Policy, requirements, error) {
 	p, err := attest.LoadPolicy(path)
 	if err != nil {
@@ -200,12 +219,14 @@ func load(path string) (attest.Policy, requirements, error) {
 	}
 	return p, r, nil
 }
+
 func circuitFor(path string, v int) ([]byte, error) {
 	if path != "" {
 		return os.ReadFile(path)
 	}
 	return libsevsnp.GenerateCircuit(v)
 }
+
 func field(v string, n int) ([]byte, error) {
 	b, err := hex.DecodeString(v)
 	if err != nil || len(b) != n {
@@ -225,6 +246,7 @@ func makeStatement(p attest.Policy, r requirements, t attest.Trust) (statement, 
 	}
 	return statement{p.SpecVersion, r, t.IssuerSPKI, t.VerificationTime, t.SerialBlocklist, t.ActiveBlocklistSize}, nil
 }
+
 func toLib(s statement) libsevsnp.Statement {
 	r := s.Requirements
 	var o libsevsnp.Statement
@@ -255,11 +277,13 @@ func toLib(s statement) libsevsnp.Statement {
 	o.ActiveSerials = s.ActiveSerials
 	return o
 }
+
 func sameStatement(a, b statement) bool {
 	aj, _ := json.Marshal(a.Requirements)
 	bj, _ := json.Marshal(b.Requirements)
 	return a.Version == b.Version && bytes.Equal(aj, bj) && bytes.Equal(a.IssuerSPKI, b.IssuerSPKI) && bytes.Equal(a.VerificationTime, b.VerificationTime) && bytes.Equal(a.SerialBlocklist, b.SerialBlocklist) && a.ActiveSerials == b.ActiveSerials
 }
+
 func checkReport(report []byte, vcek *x509.Certificate, s statement) error {
 	parsed, err := sevabi.ReportToProto(report)
 	if err != nil {

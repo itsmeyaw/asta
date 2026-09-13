@@ -191,4 +191,5 @@ func array48(value *[48]byte) *C.uint8_t   { return (*C.uint8_t)(unsafe.Pointer(
 func candidatePointer(value [][48]byte) *[48]C.uint8_t {
 	return (*[48]C.uint8_t)(unsafe.Pointer(&value[0]))
 }
+
 func serialPointer(value []byte) *[20]C.uint8_t { return (*[20]C.uint8_t)(unsafe.Pointer(&value[0])) }

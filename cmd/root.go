@@ -19,18 +19,11 @@ package cmd
 import (
 	"os"
 
-	"github.com/itsmeyaw/asta/cmd/collateral"
 	"github.com/itsmeyaw/asta/cmd/sevsnp"
 	"github.com/itsmeyaw/asta/cmd/tdx"
 	"github.com/itsmeyaw/asta/cmd/tpm"
 	"github.com/spf13/cobra"
 )
-
-type RootCmdFlags struct {
-	Verbose bool
-}
-
-var rootCmdFlags = &RootCmdFlags{}
 
 var RootCmd = &cobra.Command{
 	Use:   "asta",
@@ -48,6 +41,4 @@ func init() {
 	RootCmd.AddCommand(tpm.TpmCmd)
 	RootCmd.AddCommand(tdx.TdxCmd)
 	RootCmd.AddCommand(sevsnp.SevSnpCmd)
-	RootCmd.AddCommand(collateral.CollateralCmd)
-	RootCmd.PersistentFlags().BoolVarP(&rootCmdFlags.Verbose, "verbose", "v", false, "Enable verbose output")
 }

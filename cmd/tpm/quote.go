@@ -18,59 +18,30 @@ package tpm
 
 import (
 	"bytes"
-	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"os"
-	"sort"
 
-	"github.com/google/go-tpm/tpm2"
-	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/itsmeyaw/asta/cmd/attest"
 	"github.com/itsmeyaw/asta/cmd/libtpm2"
-	util "github.com/itsmeyaw/asta/cmd/util"
 	"github.com/spf13/cobra"
 )
 
 const (
-	// TPMS_ATTEST structure offsets (from longfellow-zk/lib/circuits/tpm2_quote/tpm2_quote_constants.h)
 	tpm2PCRDigestOffset = 125
 	tpm2PCRDigestLen    = 32
 )
 
-type ZKPStatement struct {
-	MinimalFirmwareVersion uint64 `yaml:"minimal_firmware_version" json:"minimal_firmware_version"`
-	Nonce                  []byte `json:"nonce"`                   // Freshness nonce
-	ExpectedPCRHash        []byte `json:"expected_pcr_hash"`       // PCR digest from quote (32 bytes)
-	MinFirmwareVersionBE   []byte `json:"min_firmware_version_be"` // Big-endian encoding (8 bytes)
-}
-
-// DebugProveInputs contains internal prover values, only included in debug mode
-type DebugProveInputs struct {
-	QuotedBytes  []byte `json:"quoted_bytes"`    // Raw TPMS_ATTEST bytes
-	SignatureR   []byte `json:"signature_r"`     // ECDSA signature R component
-	SignatureS   []byte `json:"signature_s"`     // ECDSA signature S component
-	AKPublicKeyX []byte `json:"ak_public_key_x"` // AK public key X coordinate
-	AKPublicKeyY []byte `json:"ak_public_key_y"` // AK public key Y coordinate
-}
-
-type QuoteProof struct {
-	Proof       []byte            `json:"proof"`
-	Statement   ZKPStatement      `json:"zkp_statement"`
-	DebugInputs *DebugProveInputs `json:"debug_inputs,omitempty"` // Only present in debug mode
-}
-
-type policyRequirements struct {
+type requirements struct {
 	Nonce                  string `json:"nonce"`
 	MinimalFirmwareVersion uint64 `json:"minimum_firmware_version"`
 	ExpectedPCRHash        string `json:"expected_pcr_hash"`
 }
 
-type policyQuoteStatement struct {
+type statement struct {
 	Nonce            []byte `json:"nonce"`
 	MinFirmware      []byte `json:"min_firmware"`
 	PCRHash          []byte `json:"pcr_hash"`
@@ -80,676 +51,81 @@ type policyQuoteStatement struct {
 	ActiveSerials    int    `json:"active_serials"`
 }
 
-type policyQuoteProof struct {
-	Profile     string               `json:"profile"`
-	SpecVersion int                  `json:"spec_version"`
-	CircuitID   []byte               `json:"circuit_id"`
-	Statement   policyQuoteStatement `json:"statement"`
-	Proof       []byte               `json:"proof"`
+type proofEnvelope struct {
+	Profile     string    `json:"profile"`
+	SpecVersion int       `json:"spec_version"`
+	CircuitID   []byte    `json:"circuit_id"`
+	Statement   statement `json:"statement"`
+	Proof       []byte    `json:"proof"`
 }
 
-var zkpStatement = &ZKPStatement{}
-
-type TpmProveQuoteCmdFlags struct {
-	OutputQuotePath       string
-	OutputCertificatePath string
-	OutputSignaturePath   string
-	PCRRegisters          []int
-	InputQuotePath        string
-	InputSignaturePath    string
-	InputCertificatePath  string
-	Debug                 bool
-	CircuitPath           string
-	PolicyPath            string
-	CheckRequirements     bool
+var proveQuoteFlags struct {
+	quote, signature, certificate, circuit, policy, output string
 }
 
-var tpmProveQuoteCmdFlags = &TpmProveQuoteCmdFlags{}
+var verifyQuoteFlags struct{ input, circuit, policy string }
 
 var tpmProveQuoteCmd = &cobra.Command{
 	Use:   "quote",
-	Short: "Perform TPM attestation and generate a Zero Knowledge Proof for the quote",
-	PreRunE: func(cmd *cobra.Command, args []string) error {
-		preExtracted := tpmProveQuoteCmdFlags.InputQuotePath != ""
-
-		if preExtracted {
-			if tpmProveQuoteCmdFlags.InputSignaturePath == "" || tpmProveQuoteCmdFlags.InputCertificatePath == "" {
-				return util.UsageError(cmd, fmt.Errorf("--quote-input, --signature-input, and --certificate-input must all be provided together"))
-			}
-
-			if tpmProveQuoteCmdFlags.PolicyPath == "" && !cmd.Flags().Changed("nonce") {
-				return util.UsageError(cmd, fmt.Errorf("--nonce is required when using pre-extracted quote inputs"))
-			}
-
-			parsedNonce, err := util.ParseNonceFlag(cmd)
-			if err != nil {
-				return err
-			}
-			if tpmProveQuoteCmdFlags.PolicyPath == "" && len(parsedNonce) == 0 {
-				return util.UsageError(cmd, fmt.Errorf("--nonce is required when using pre-extracted quote inputs"))
-			}
-			tpmCmdFlags.Nonce = parsedNonce
-
-			if len(tpmCmdFlags.Nonce) < 32 {
-				paddedNonce := make([]byte, 32)
-				copy(paddedNonce, tpmCmdFlags.Nonce)
-				tpmCmdFlags.Nonce = paddedNonce
-			}
-
-			if err := verifyZKPStatement(); err != nil {
-				return util.UsageError(cmd, err)
-			}
-
-			return nil
-		}
-
-		if cmd.Flags().Changed("nonce") {
-			if parsedNonce, err := util.ParseNonceFlag(cmd); err != nil {
-				return err
-			} else {
-				tpmCmdFlags.Nonce = parsedNonce
-			}
-		}
-
-		if len(tpmCmdFlags.Nonce) == 0 {
-			nonce, err := generateSecureNonce()
-			if err != nil {
-				return fmt.Errorf("generating secure nonce: %w", err)
-			} else {
-				fmt.Printf("Using nonce: %s\n", hex.EncodeToString(nonce))
-			}
-			tpmCmdFlags.Nonce = nonce
-		}
-
-		// Pad the nonce to 32 bytes if it's shorter
-		if len(tpmCmdFlags.Nonce) < 32 {
-			paddedNonce := make([]byte, 32)
-			copy(paddedNonce, tpmCmdFlags.Nonce)
-			tpmCmdFlags.Nonce = paddedNonce
-		}
-
-		if err := verifyGenericArguments(cmd); err != nil {
-			return util.UsageError(cmd, err)
-		}
-
-		return nil
-	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if tpmProveQuoteCmdFlags.PolicyPath != "" {
-			return provePolicyBoundTPM()
-		}
-		var proveOutput QuoteProof
-		var err error
-
-		if tpmProveQuoteCmdFlags.InputQuotePath != "" {
-			proveOutput, err = proveFromPreExtracted()
-		} else {
-			proveOutput, err = proveFromTPM()
-		}
-		if err != nil {
-			return err
-		}
-
-		if tpmProveCmdFlags.OutputPath != "" {
-			outputBytes, err := json.Marshal(proveOutput)
-			if err != nil {
-				return fmt.Errorf("marshaling prove output: %w", err)
-			}
-			if err := os.WriteFile(tpmProveCmdFlags.OutputPath, outputBytes, 0644); err != nil {
-				return fmt.Errorf("writing prove output to file: %w", err)
-			}
-			fmt.Printf("Prove output written to %s\n", tpmProveCmdFlags.OutputPath)
-		}
-
-		return nil
-	},
+	Short: "Generate a policy-bound TPM quote proof",
+	RunE:  func(*cobra.Command, []string) error { return proveQuote() },
 }
-
-type TpmVerifyQuoteCmdFlags struct {
-	CircuitPath string
-	PolicyPath  string
-}
-
-var tpmVerifyQuoteCmdFlags = &TpmVerifyQuoteCmdFlags{}
 
 var tpmVerifyQuoteCmd = &cobra.Command{
 	Use:   "quote",
-	Short: "Verify a TPM quote Zero Knowledge Proof against constraints",
-	PreRunE: func(cmd *cobra.Command, args []string) error {
-		if tpmVerifyQuoteCmdFlags.PolicyPath != "" {
-			return nil
-		}
-		if err := cmd.MarkFlagRequired("nonce"); err != nil {
-			return err
-		}
-
-		nonce, err := util.ParseNonceFlag(cmd)
-		if err != nil {
-			return util.UsageError(cmd, err)
-		}
-		if len(nonce) == 0 {
-			return util.UsageError(cmd, fmt.Errorf("nonce must be provided"))
-		}
-		tpmCmdFlags.Nonce = nonce
-
-		// Pad nonce to 32 bytes to match prove behavior
-		if len(tpmCmdFlags.Nonce) < 32 {
-			paddedNonce := make([]byte, 32)
-			copy(paddedNonce, tpmCmdFlags.Nonce)
-			tpmCmdFlags.Nonce = paddedNonce
-		}
-
-		return nil
-	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if tpmVerifyQuoteCmdFlags.PolicyPath != "" {
-			return verifyPolicyBoundTPM()
-		}
-		proofFileBytes, err := os.ReadFile(tpmVerifyCmdFlags.InputPath)
-		if err != nil {
-			return fmt.Errorf("reading proof file: %w", err)
-		}
-
-		var quoteProof QuoteProof
-		if err := json.Unmarshal(proofFileBytes, &quoteProof); err != nil {
-			return fmt.Errorf("parsing proof file: %w", err)
-		}
-
-		// Verify nonce freshness against user-provided nonce
-		if !bytes.Equal(quoteProof.Statement.Nonce, tpmCmdFlags.Nonce) {
-			return fmt.Errorf("nonce mismatch: proof contains a different nonce than provided")
-		}
-
-		// Validate statement fields
-		if len(quoteProof.Statement.Nonce) != 32 {
-			return fmt.Errorf("nonce must be 32 bytes, got %d", len(quoteProof.Statement.Nonce))
-		}
-		if len(quoteProof.Statement.ExpectedPCRHash) != 32 {
-			return fmt.Errorf("expected PCR hash must be 32 bytes, got %d", len(quoteProof.Statement.ExpectedPCRHash))
-		}
-		if len(quoteProof.Statement.MinFirmwareVersionBE) != 8 {
-			return fmt.Errorf("min firmware version BE must be 8 bytes, got %d", len(quoteProof.Statement.MinFirmwareVersionBE))
-		}
-
-		// Verify consistency: MinFirmwareVersionBE should match MinimalFirmwareVersion
-		var expectedMinFW [8]byte
-		binary.BigEndian.PutUint64(expectedMinFW[:], quoteProof.Statement.MinimalFirmwareVersion)
-		if !bytes.Equal(quoteProof.Statement.MinFirmwareVersionBE, expectedMinFW[:]) {
-			return fmt.Errorf("min_firmware_version_be does not match minimal_firmware_version")
-		}
-
-		// Prepare fixed-size arrays for the verifier
-		var minFirmwareVersion [8]byte
-		copy(minFirmwareVersion[:], quoteProof.Statement.MinFirmwareVersionBE)
-
-		var pcrHash [32]byte
-		copy(pcrHash[:], quoteProof.Statement.ExpectedPCRHash)
-
-		// Load or generate circuit
-		circuit, err := loadOrGenerateCircuit(tpmVerifyQuoteCmdFlags.CircuitPath)
-		if err != nil {
-			return fmt.Errorf("loading ZKP circuit: %w", err)
-		}
-
-		// Run ZKP verifier
-		if err := libtpm2.RunVerifier(
-			false, // useV7 must match the value used during proving
-			circuit,
-			quoteProof.Statement.Nonce,
-			minFirmwareVersion,
-			pcrHash,
-			quoteProof.Proof,
-		); err != nil {
-			return fmt.Errorf("ZKP verification failed: %w", err)
-		}
-
-		fmt.Println("ZKP verification passed.")
-		return nil
-	},
-}
-
-var tpmCircuitCmd = &cobra.Command{
-	Use:   "circuit",
-	Short: "TPM ZK circuit operations",
-	Long:  "Commands for managing TPM ZK circuit generation",
+	Short: "Verify a policy-bound TPM quote proof",
+	RunE:  func(*cobra.Command, []string) error { return verifyQuote() },
 }
 
 var tpmCircuitGenerateCmd = &cobra.Command{
-	Use:   "generate <output-path>",
-	Short: "Generate and save the TPM ZK circuit to a file",
-	Long:  "Pre-generate the TPM ZK circuit and save it to a file for later use with prove/verify commands",
+	Use:   "generate <output>",
+	Short: "Generate a TPM ZK circuit",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		outputPath := args[0]
-
-		fmt.Println("Generating TPM ZK circuit...")
+	RunE: func(_ *cobra.Command, args []string) error {
 		circuit, err := libtpm2.GenerateCircuit()
 		if err != nil {
 			return fmt.Errorf("generating circuit: %w", err)
 		}
-
-		if err := os.WriteFile(outputPath, circuit, 0644); err != nil {
-			return fmt.Errorf("writing circuit to file: %w", err)
-		}
-
-		fmt.Printf("Circuit successfully generated and saved to %s\n", outputPath)
-		return nil
+		return os.WriteFile(args[0], circuit, 0644)
 	},
 }
 
-func proveFromPreExtracted() (QuoteProof, error) {
-	quotedBytes, err := os.ReadFile(tpmProveQuoteCmdFlags.InputQuotePath)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("reading quote file: %w", err)
-	}
+var tpmCircuitCmd = &cobra.Command{Use: "circuit", Short: "TPM ZK circuit operations"}
 
-	sigBytes, err := os.ReadFile(tpmProveQuoteCmdFlags.InputSignaturePath)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("reading signature file: %w", err)
-	}
-	if len(sigBytes) != 64 {
-		return QuoteProof{}, fmt.Errorf("signature file must be exactly 64 bytes (R||S for P-256, got %d bytes)", len(sigBytes))
-	}
-
-	var sigR, sigS [32]byte
-	copy(sigR[:], sigBytes[:32])
-	copy(sigS[:], sigBytes[32:64])
-
-	certBytes, err := os.ReadFile(tpmProveQuoteCmdFlags.InputCertificatePath)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("reading certificate file: %w", err)
-	}
-	cert, err := x509.ParseCertificate(certBytes)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("parsing certificate: %w", err)
-	}
-	ecdsaPubKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
-	if !ok {
-		return QuoteProof{}, fmt.Errorf("certificate does not contain an ECDSA public key")
-	}
-
-	ecdhKey, err := ecdsaPubKey.ECDH()
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("converting certificate public key: %w", err)
-	}
-	// Uncompressed point encoding: 0x04 || X || Y, each coordinate is (len-1)/2 bytes
-	pubKeyBytes := ecdhKey.Bytes()
-	coordLen := (len(pubKeyBytes) - 1) / 2
-
-	return generateProveFromRawData(
-		quotedBytes,
-		sigR,
-		sigS,
-		pubKeyBytes[1:1+coordLen],
-		pubKeyBytes[1+coordLen:],
-		zkpStatement,
-		tpmCmdFlags.Nonce,
-		tpmProveQuoteCmdFlags.CircuitPath,
-	)
-}
-
-func proveFromTPM() (QuoteProof, error) {
-	tpm, err := openTPM(tpmCmdFlags.DevicePath)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("opening TPM: %w", err)
-	}
-	defer tpm.Close()
-
-	akResponse, err := attesationKeys[tpmCmdFlags.AttestationKeyType](tpm)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("creating attestation key: %w", err)
-	}
-	akHandle := akResponse.handle
-	akName := akResponse.name
-	akCert := akResponse.certificate
-
-	defer func() {
-		_, _ = tpm2.FlushContext{FlushHandle: akHandle}.Execute(tpm)
-	}()
-
-	quote, err := createTPMQuote(tpm, akHandle, akName, tpmProveQuoteCmdFlags.PCRRegisters)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("creating TPM quote: %w", err)
-	}
-
-	if tpmProveQuoteCmdFlags.OutputQuotePath != "" {
-		if err := os.WriteFile(tpmProveQuoteCmdFlags.OutputQuotePath, quote.Quoted.Bytes(), 0644); err != nil {
-			return QuoteProof{}, fmt.Errorf("writing quote to file: %w", err)
-		}
-		fmt.Printf("Quote written to %s\n", tpmProveQuoteCmdFlags.OutputQuotePath)
-	}
-
-	signature, err := quote.Signature.Signature.ECDSA()
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("parsing quote signature: %w", err)
-	}
-
-	if tpmProveQuoteCmdFlags.OutputSignaturePath != "" {
-		signatureBytes := append(signature.SignatureR.Buffer, signature.SignatureS.Buffer...)
-		if err := os.WriteFile(tpmProveQuoteCmdFlags.OutputSignaturePath, signatureBytes, 0644); err != nil {
-			return QuoteProof{}, fmt.Errorf("writing quote signature to file: %w", err)
-		}
-		fmt.Printf("Quote signature written to %s\n", tpmProveQuoteCmdFlags.OutputSignaturePath)
-	}
-
-	if tpmProveQuoteCmdFlags.OutputCertificatePath != "" {
-		if err := os.WriteFile(tpmProveQuoteCmdFlags.OutputCertificatePath, akCert.Raw, 0644); err != nil {
-			return QuoteProof{}, fmt.Errorf("writing AK certificate to file: %w", err)
-		}
-		fmt.Printf("AK certificate written to %s\n", tpmProveQuoteCmdFlags.OutputCertificatePath)
-	}
-
-	return generateProve(tpm, quote, zkpStatement, akHandle, akCert)
-}
-
-func createTPMQuote(tpm transport.TPM, akHandle tpm2.TPMHandle, akName tpm2.TPM2BName, selectedPCRRegisters []int) (*tpm2.QuoteResponse, error) {
-	pcrSelection, err := pcrSelectionForRegisters(tpm, selectedPCRRegisters)
-	if err != nil {
-		return nil, err
-	}
-
-	pcrRsp, err := tpm2.PCRRead{PCRSelectionIn: *pcrSelection}.Execute(tpm)
-	if err != nil {
-		return nil, fmt.Errorf("reading PCRs: %w", err)
-	}
-
-	quoteRsp, err := tpm2.Quote{
-		SignHandle: tpm2.AuthHandle{
-			Handle: akHandle,
-			Name:   akName,
-			Auth:   tpm2.PasswordAuth(nil),
-		},
-		QualifyingData: tpm2.TPM2BData{Buffer: tpmCmdFlags.Nonce},
-		InScheme:       tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgNull},
-		PCRSelect:      pcrRsp.PCRSelectionOut,
-	}.Execute(tpm)
-	if err != nil {
-		return nil, fmt.Errorf("quoting PCRs: %w", err)
-	}
-
-	return quoteRsp, nil
-}
-
-func pcrSelectionForRegisters(tpm transport.TPM, selectedPCRRegisters []int) (*tpm2.TPMLPCRSelection, error) {
-	assignedSelection, err := assignedPCRSelection(tpm)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(selectedPCRRegisters) == 0 {
-		return assignedSelection, nil
-	}
-
-	uniqueRegisters := make(map[int]struct{}, len(selectedPCRRegisters))
-	for _, pcrRegister := range selectedPCRRegisters {
-		if pcrRegister < 0 {
-			return nil, fmt.Errorf("PCR register must be >= 0 (got %d)", pcrRegister)
-		}
-		uniqueRegisters[pcrRegister] = struct{}{}
-	}
-
-	orderedRegisters := make([]int, 0, len(uniqueRegisters))
-	for pcrRegister := range uniqueRegisters {
-		orderedRegisters = append(orderedRegisters, pcrRegister)
-	}
-	sort.Ints(orderedRegisters)
-
-	filteredSelections := make([]tpm2.TPMSPCRSelection, 0, len(assignedSelection.PCRSelections))
-	for _, bankSelection := range assignedSelection.PCRSelections {
-		filteredPCRBytes := make([]byte, len(bankSelection.PCRSelect))
-		for _, pcrRegister := range orderedRegisters {
-			byteIndex := pcrRegister / 8
-			bitPosition := uint(pcrRegister % 8)
-			if byteIndex < len(filteredPCRBytes) {
-				filteredPCRBytes[byteIndex] |= 1 << bitPosition
-			}
-		}
-
-		hasAnyPCR := false
-		for i := range filteredPCRBytes {
-			filteredPCRBytes[i] &= bankSelection.PCRSelect[i]
-			if filteredPCRBytes[i] != 0 {
-				hasAnyPCR = true
-			}
-		}
-
-		if hasAnyPCR {
-			filteredSelections = append(filteredSelections, tpm2.TPMSPCRSelection{
-				Hash:      bankSelection.Hash,
-				PCRSelect: filteredPCRBytes,
-			})
-		}
-	}
-
-	if len(filteredSelections) == 0 {
-		return nil, fmt.Errorf("none of the selected PCR registers are available: %v", orderedRegisters)
-	}
-
-	return &tpm2.TPMLPCRSelection{PCRSelections: filteredSelections}, nil
-}
-
-func generateProve(tpm transport.TPM, quote *tpm2.QuoteResponse, statement *ZKPStatement, akHandle tpm2.TPMHandle, akCert x509.Certificate) (QuoteProof, error) {
-	readPublicResponse, err := tpm2.ReadPublic{ObjectHandle: akHandle}.Execute(tpm)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("reading AK public area: %w", err)
-	}
-
-	content, err := readPublicResponse.OutPublic.Contents()
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("extracting AK public key: %w", err)
-	}
-
-	akPublicKey, err := content.Unique.ECC()
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("parsing AK public key: %w", err)
-	}
-
-	// Extract ECDSA signature (r, s) from quote
-	ecdsaSig, err := quote.Signature.Signature.ECDSA()
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("extracting ECDSA signature: %w", err)
-	}
-
-	var sigR, sigS [32]byte
-	copy(sigR[:], padLeft(ecdsaSig.SignatureR.Buffer, 32))
-	copy(sigS[:], padLeft(ecdsaSig.SignatureS.Buffer, 32))
-
-	return generateProveFromRawData(
-		quote.Quoted.Bytes(),
-		sigR,
-		sigS,
-		akPublicKey.X.Buffer,
-		akPublicKey.Y.Buffer,
-		statement,
-		tpmCmdFlags.Nonce,
-		tpmProveQuoteCmdFlags.CircuitPath,
-	)
-}
-
-func generateProveFromRawData(
-	quotedBytes []byte,
-	sigR [32]byte,
-	sigS [32]byte,
-	akPubKeyX []byte,
-	akPubKeyY []byte,
-	statement *ZKPStatement,
-	nonce []byte,
-	circuitPath string,
-) (QuoteProof, error) {
-	// Encode firmware version as 8-byte big-endian
-	var minFirmwareVersion [8]byte
-	binary.BigEndian.PutUint64(minFirmwareVersion[:], statement.MinimalFirmwareVersion)
-
-	// Extract PCR digest from the quote (at fixed offset 125, 32 bytes)
-	if len(quotedBytes) < tpm2PCRDigestOffset+tpm2PCRDigestLen {
-		return QuoteProof{}, fmt.Errorf("quote too short to contain PCR digest (need %d bytes, got %d)",
-			tpm2PCRDigestOffset+tpm2PCRDigestLen, len(quotedBytes))
-	}
-	var expectedPCRHash [32]byte
-	copy(expectedPCRHash[:], quotedBytes[tpm2PCRDigestOffset:tpm2PCRDigestOffset+tpm2PCRDigestLen])
-
-	// Convert AK public key coordinates to decimal strings for the C library
-	pkX := new(big.Int).SetBytes(akPubKeyX).String()
-	pkY := new(big.Int).SetBytes(akPubKeyY).String()
-
-	// Load or generate circuit
-	circuit, err := loadOrGenerateCircuit(circuitPath)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("loading ZKP circuit: %w", err)
-	}
-
-	// Run the ZKP prover
-	result, err := libtpm2.RunProver(
-		false, // usev7
-		circuit,
-		sigR,
-		sigS,
-		nonce,
-		minFirmwareVersion,
-		expectedPCRHash,
-		pkX,
-		pkY,
-		quotedBytes,
-	)
-	if err != nil {
-		return QuoteProof{}, fmt.Errorf("running ZKP prover: %w", err)
-	}
-
-	// Populate statement with computed values
-	stmt := ZKPStatement{
-		MinimalFirmwareVersion: statement.MinimalFirmwareVersion,
-		Nonce:                  nonce,
-		ExpectedPCRHash:        expectedPCRHash[:],
-		MinFirmwareVersionBE:   minFirmwareVersion[:],
-	}
-
-	// Build proof output
-	proof := QuoteProof{
-		Proof:     result.Proof,
-		Statement: stmt,
-	}
-
-	// Include debug inputs if debug mode is enabled
-	if tpmProveQuoteCmdFlags.Debug {
-		proof.DebugInputs = &DebugProveInputs{
-			QuotedBytes:  quotedBytes,
-			SignatureR:   sigR[:],
-			SignatureS:   sigS[:],
-			AKPublicKeyX: akPubKeyX,
-			AKPublicKeyY: akPubKeyY,
-		}
-	}
-
-	return proof, nil
-}
-
-// padLeft pads a byte slice with leading zeros to reach the target length.
-func padLeft(b []byte, size int) []byte {
-	if len(b) >= size {
-		return b[len(b)-size:]
-	}
-	padded := make([]byte, size)
-	copy(padded[size-len(b):], b)
-	return padded
-}
-
-// loadOrGenerateCircuit loads a circuit from file if circuitPath is provided,
-// otherwise generates it on-demand.
-func loadOrGenerateCircuit(circuitPath string) ([]byte, error) {
-	if circuitPath == "" {
-		// Current behavior: generate on-demand
+func circuitFor(path string) ([]byte, error) {
+	if path == "" {
 		return libtpm2.GenerateCircuit()
 	}
-
-	// Load from file
-	circuitBytes, err := os.ReadFile(circuitPath)
+	circuit, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading circuit file: %w", err)
 	}
-
-	if len(circuitBytes) == 0 {
-		return nil, fmt.Errorf("circuit file is empty: %s", circuitPath)
+	if len(circuit) == 0 {
+		return nil, fmt.Errorf("circuit file is empty: %s", path)
 	}
-
-	return circuitBytes, nil
+	return circuit, nil
 }
 
-func verifyZKPStatement() error {
-	// No additional validation needed - firmware version is a uint64
-	return nil
-}
-
-func verifyGenericArguments(cmd *cobra.Command) error {
-	if err := verifyZKPStatement(); err != nil {
-		return err
+func proveQuote() error {
+	if proveQuoteFlags.quote == "" || proveQuoteFlags.signature == "" || proveQuoteFlags.certificate == "" {
+		return fmt.Errorf("policy-bound TPM proving requires --quote, --signature, and --certificate")
 	}
-
-	if _, err := os.Stat(tpmCmdFlags.DevicePath); os.IsNotExist(err) {
-		return fmt.Errorf("TPM device not found at %q: %w", tpmCmdFlags.DevicePath, err)
-	}
-
-	pcrCount, err := getPCRCount(tpmCmdFlags.DevicePath)
-	if err != nil {
-		return fmt.Errorf("getting PCR count: %w", err)
-	}
-
-	for _, pcrRegister := range tpmProveQuoteCmdFlags.PCRRegisters {
-		if pcrRegister < 0 {
-			return fmt.Errorf("PCR register must be >= 0 (got %d)", pcrRegister)
-		}
-		if uint16(pcrRegister) >= pcrCount {
-			return fmt.Errorf("selected PCR register %d is out of bounds (max: %d)", pcrRegister, pcrCount-1)
-		}
-	}
-	return nil
-}
-
-func getPCRCount(devicePath string) (uint16, error) {
-	tpm, err := openTPM(devicePath)
-	if err != nil {
-		return 0, err
-	}
-	defer tpm.Close()
-
-	pcrs, err := assignedPCRSelection(tpm)
-	if err != nil {
-		return 0, fmt.Errorf("parsing PCR capabilities: %w", err)
-	}
-
-	maxPCRCount := 0
-	for _, selection := range pcrs.PCRSelections {
-		if bankPCRCount := len(selection.PCRSelect) * 8; bankPCRCount > maxPCRCount {
-			maxPCRCount = bankPCRCount
-		}
-	}
-
-	if maxPCRCount == 0 {
-		return 0, fmt.Errorf("TPM reported no selectable PCR registers")
-	}
-
-	return uint16(maxPCRCount), nil
-}
-
-func provePolicyBoundTPM() error {
-	if tpmProveQuoteCmdFlags.InputQuotePath == "" || tpmProveQuoteCmdFlags.InputSignaturePath == "" || tpmProveQuoteCmdFlags.InputCertificatePath == "" {
-		return fmt.Errorf("policy-bound TPM proving requires --quote-input, --signature-input, and --certificate-input")
-	}
-	policy, requirements, err := loadPolicyRequirements(tpmProveQuoteCmdFlags.PolicyPath)
+	policy, requirements, err := load(proveQuoteFlags.policy)
 	if err != nil {
 		return err
 	}
-	quote, err := os.ReadFile(tpmProveQuoteCmdFlags.InputQuotePath)
+	quote, err := os.ReadFile(proveQuoteFlags.quote)
 	if err != nil {
 		return fmt.Errorf("reading quote: %w", err)
 	}
-	signature, err := os.ReadFile(tpmProveQuoteCmdFlags.InputSignaturePath)
+	signature, err := os.ReadFile(proveQuoteFlags.signature)
 	if err != nil {
 		return fmt.Errorf("reading signature: %w", err)
 	}
 	if len(signature) != 64 {
 		return fmt.Errorf("signature must be 64 bytes, got %d", len(signature))
 	}
-	certificateDER, err := os.ReadFile(tpmProveQuoteCmdFlags.InputCertificatePath)
+	certificateDER, err := os.ReadFile(proveQuoteFlags.certificate)
 	if err != nil {
 		return fmt.Errorf("reading AK certificate: %w", err)
 	}
@@ -761,7 +137,7 @@ func provePolicyBoundTPM() error {
 	if err != nil {
 		return err
 	}
-	statement, err := makePolicyStatement(requirements, trust)
+	statement, err := makeStatement(requirements, trust)
 	if err != nil {
 		return err
 	}
@@ -769,7 +145,7 @@ func provePolicyBoundTPM() error {
 	if len(quote) < tpm2PCRDigestOffset+tpm2PCRDigestLen || !bytes.Equal(quote[tpm2PCRDigestOffset:tpm2PCRDigestOffset+tpm2PCRDigestLen], statement.PCRHash[:]) {
 		return fmt.Errorf("quote PCR digest does not match policy")
 	}
-	circuit, err := loadOrGenerateCircuit(tpmProveQuoteCmdFlags.CircuitPath)
+	circuit, err := circuitFor(proveQuoteFlags.circuit)
 	if err != nil {
 		return err
 	}
@@ -784,18 +160,18 @@ func provePolicyBoundTPM() error {
 	if err != nil {
 		return err
 	}
-	output, err := json.Marshal(policyQuoteProof{policy.Profile, policy.SpecVersion, id[:], proofStatement(statement), proof})
+	output, err := json.Marshal(proofEnvelope{policy.Profile, policy.SpecVersion, id[:], proofStatement(statement), proof})
 	if err != nil {
-		return err
+		return fmt.Errorf("encoding proof: %w", err)
 	}
-	if err := os.WriteFile(tpmProveCmdFlags.OutputPath, output, 0600); err != nil {
+	if err := os.WriteFile(proveQuoteFlags.output, output, 0600); err != nil {
 		return fmt.Errorf("writing proof: %w", err)
 	}
 	return nil
 }
 
-func verifyPolicyBoundTPM() error {
-	policy, requirements, err := loadPolicyRequirements(tpmVerifyQuoteCmdFlags.PolicyPath)
+func verifyQuote() error {
+	policy, requirements, err := load(verifyQuoteFlags.policy)
 	if err != nil {
 		return err
 	}
@@ -803,23 +179,23 @@ func verifyPolicyBoundTPM() error {
 	if err != nil {
 		return err
 	}
-	statement, err := makePolicyStatement(requirements, trust)
+	statement, err := makeStatement(requirements, trust)
 	if err != nil {
 		return err
 	}
 	statement.Version = policy.SpecVersion
-	data, err := os.ReadFile(tpmVerifyCmdFlags.InputPath)
+	data, err := os.ReadFile(verifyQuoteFlags.input)
 	if err != nil {
 		return fmt.Errorf("reading proof: %w", err)
 	}
-	var envelope policyQuoteProof
-	if err := json.Unmarshal(data, &envelope); err != nil {
+	var envelope proofEnvelope
+	if err := attest.DecodeJSON(data, &envelope); err != nil {
 		return fmt.Errorf("parsing proof: %w", err)
 	}
 	if envelope.Profile != policy.Profile || envelope.SpecVersion != policy.SpecVersion || !sameStatement(envelope.Statement, proofStatement(statement)) {
 		return fmt.Errorf("proof statement does not match verifier policy and collateral")
 	}
-	circuit, err := loadOrGenerateCircuit(tpmVerifyQuoteCmdFlags.CircuitPath)
+	circuit, err := circuitFor(verifyQuoteFlags.circuit)
 	if err != nil {
 		return err
 	}
@@ -830,22 +206,22 @@ func verifyPolicyBoundTPM() error {
 	return libtpm2.Verify(circuit, statement, envelope.Proof)
 }
 
-func loadPolicyRequirements(path string) (attest.Policy, policyRequirements, error) {
+func load(path string) (attest.Policy, requirements, error) {
 	policy, err := attest.LoadPolicy(path)
 	if err != nil {
-		return attest.Policy{}, policyRequirements{}, err
+		return attest.Policy{}, requirements{}, err
 	}
 	if policy.Profile != "longfellow-tpm2-gcp-ak-v1" {
-		return attest.Policy{}, policyRequirements{}, fmt.Errorf("policy profile must be longfellow-tpm2-gcp-ak-v1")
+		return attest.Policy{}, requirements{}, fmt.Errorf("policy profile must be longfellow-tpm2-gcp-ak-v1")
 	}
-	var requirements policyRequirements
-	if err := json.Unmarshal(policy.Requirements, &requirements); err != nil {
-		return attest.Policy{}, policyRequirements{}, fmt.Errorf("parsing TPM requirements: %w", err)
+	var req requirements
+	if err := attest.DecodeJSON(policy.Requirements, &req); err != nil {
+		return attest.Policy{}, requirements{}, fmt.Errorf("parsing TPM requirements: %w", err)
 	}
-	return policy, requirements, nil
+	return policy, req, nil
 }
 
-func makePolicyStatement(requirements policyRequirements, trust attest.Trust) (libtpm2.Statement, error) {
+func makeStatement(requirements requirements, trust attest.Trust) (libtpm2.Statement, error) {
 	nonce, err := hex.DecodeString(requirements.Nonce)
 	if err != nil || len(nonce) == 0 || len(nonce) > 32 {
 		return libtpm2.Statement{}, fmt.Errorf("TPM policy nonce must contain 1 to 32 hex bytes")
@@ -861,33 +237,33 @@ func makePolicyStatement(requirements policyRequirements, trust attest.Trust) (l
 	return libtpm2.Statement{Version: 6, Nonce: nonce, MinFirmware: firmware, PCRHash: pcrHash, IssuerSPKI: trust.IssuerSPKI, VerificationTime: trust.VerificationTime, SerialBlocklist: trust.SerialBlocklist, ActiveSerials: trust.ActiveBlocklistSize}, nil
 }
 
-func proofStatement(statement libtpm2.Statement) policyQuoteStatement {
-	return policyQuoteStatement{statement.Nonce, statement.MinFirmware[:], statement.PCRHash[:], statement.IssuerSPKI, statement.VerificationTime, statement.SerialBlocklist, statement.ActiveSerials}
+func proofStatement(s libtpm2.Statement) statement {
+	return statement{s.Nonce, s.MinFirmware[:], s.PCRHash[:], s.IssuerSPKI, s.VerificationTime, s.SerialBlocklist, s.ActiveSerials}
 }
 
-func sameStatement(left, right policyQuoteStatement) bool {
+func sameStatement(left, right statement) bool {
 	return bytes.Equal(left.Nonce, right.Nonce) && bytes.Equal(left.MinFirmware, right.MinFirmware) && bytes.Equal(left.PCRHash, right.PCRHash) && bytes.Equal(left.IssuerSPKI, right.IssuerSPKI) && bytes.Equal(left.VerificationTime, right.VerificationTime) && bytes.Equal(left.SerialBlocklist, right.SerialBlocklist) && left.ActiveSerials == right.ActiveSerials
 }
 
 func init() {
 	tpmProveCmd.AddCommand(tpmProveQuoteCmd)
-	tpmProveQuoteCmd.Flags().StringVarP(&tpmProveQuoteCmdFlags.OutputQuotePath, "quote-output", "q", "quote.bin", "Output file for the TPM attestation quote")
-	tpmProveQuoteCmd.Flags().StringVarP(&tpmProveQuoteCmdFlags.OutputSignaturePath, "signature-output", "s", "quote.sig", "Output file for the TPM quote signature")
-	tpmProveQuoteCmd.Flags().StringVarP(&tpmProveQuoteCmdFlags.OutputCertificatePath, "certificate-output", "c", "quote.crt", "Output file for the TPM attestation key certificate")
-	tpmProveQuoteCmd.Flags().IntSliceVarP(&tpmProveQuoteCmdFlags.PCRRegisters, "pcr-registers", "p", nil, "Comma-separated PCR register indices to include in quote (default: all available)")
-	tpmProveQuoteCmd.Flags().String("nonce", "", "Hex-encoded nonce (max 32 bytes; auto-generated if not provided)")
-	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.InputQuotePath, "quote-input", "", "Path to pre-extracted TPM quote file (TPMS_ATTEST bytes)")
-	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.InputSignaturePath, "signature-input", "", "Path to pre-extracted quote signature file (64 bytes: R||S)")
-	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.InputCertificatePath, "certificate-input", "", "Path to pre-extracted AK certificate file (DER-encoded X.509)")
-	tpmProveQuoteCmd.Flags().BoolVar(&tpmProveQuoteCmdFlags.Debug, "debug", false, "Include debug inputs (quoted bytes, signature, AK public key) in proof output")
-	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.CircuitPath, "circuit", "", "Path to pre-generated circuit file (if not provided, circuit will be generated on-demand)")
-	tpmProveQuoteCmd.Flags().StringVar(&tpmProveQuoteCmdFlags.PolicyPath, "policy", "", "Verifier policy and local collateral JSON")
-	tpmProveQuoteCmd.Flags().BoolVar(&tpmProveQuoteCmdFlags.CheckRequirements, "check-requirements", false, "Run native policy and collateral preflight before proving")
+	tpmProveQuoteCmd.Flags().StringVar(&proveQuoteFlags.quote, "quote", "", "TPMS_ATTEST quote input")
+	tpmProveQuoteCmd.Flags().StringVar(&proveQuoteFlags.signature, "signature", "", "64-byte R||S quote signature")
+	tpmProveQuoteCmd.Flags().StringVar(&proveQuoteFlags.certificate, "certificate", "", "DER AK certificate")
+	tpmProveQuoteCmd.Flags().StringVar(&proveQuoteFlags.policy, "policy", "", "Policy JSON")
+	tpmProveQuoteCmd.Flags().StringVar(&proveQuoteFlags.circuit, "circuit", "", "Circuit file")
+	tpmProveQuoteCmd.Flags().StringVarP(&proveQuoteFlags.output, "output", "o", "proof.json", "Proof output")
+	_ = tpmProveQuoteCmd.MarkFlagRequired("quote")
+	_ = tpmProveQuoteCmd.MarkFlagRequired("signature")
+	_ = tpmProveQuoteCmd.MarkFlagRequired("certificate")
+	_ = tpmProveQuoteCmd.MarkFlagRequired("policy")
 
 	tpmVerifyCmd.AddCommand(tpmVerifyQuoteCmd)
-	tpmVerifyQuoteCmd.Flags().String("nonce", "", "Hex-encoded nonce used in quote freshness validation (max 32 bytes)")
-	tpmVerifyQuoteCmd.Flags().StringVar(&tpmVerifyQuoteCmdFlags.CircuitPath, "circuit", "", "Path to pre-generated circuit file (if not provided, circuit will be generated on-demand)")
-	tpmVerifyQuoteCmd.Flags().StringVar(&tpmVerifyQuoteCmdFlags.PolicyPath, "policy", "", "Verifier policy and local collateral JSON")
+	tpmVerifyQuoteCmd.Flags().StringVarP(&verifyQuoteFlags.input, "input", "i", "", "Proof input")
+	tpmVerifyQuoteCmd.Flags().StringVar(&verifyQuoteFlags.policy, "policy", "", "Policy JSON")
+	tpmVerifyQuoteCmd.Flags().StringVar(&verifyQuoteFlags.circuit, "circuit", "", "Circuit file")
+	_ = tpmVerifyQuoteCmd.MarkFlagRequired("input")
+	_ = tpmVerifyQuoteCmd.MarkFlagRequired("policy")
 
 	TpmCmd.AddCommand(tpmCircuitCmd)
 	tpmCircuitCmd.AddCommand(tpmCircuitGenerateCmd)

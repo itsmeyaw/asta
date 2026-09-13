@@ -55,98 +55,22 @@ type proofEnvelope struct {
 	Proof       []byte    `json:"proof"`
 }
 
-var flags struct {
-	input, policy, circuit, output string
+var proveQuoteFlags struct {
+	quote, policy, circuit, output string
 	check                          bool
+}
+
+var verifyQuoteFlags struct {
+	input, policy, circuit string
 }
 
 var TdxCmd = &cobra.Command{Use: "tdx", Short: "Intel TDX quote proofs"}
 var proveCmd = &cobra.Command{Use: "prove", Short: "Generate a TDX quote proof"}
 var verifyCmd = &cobra.Command{Use: "verify", Short: "Verify a TDX quote proof"}
 
-var proveQuoteCmd = &cobra.Command{
-	Use: "quote", Short: "Prove a TDX quote", RunE: func(*cobra.Command, []string) error {
-		policy, req, err := load(flags.policy)
-		if err != nil {
-			return err
-		}
-		quote, err := os.ReadFile(flags.input)
-		if err != nil {
-			return fmt.Errorf("reading quote: %w", err)
-		}
-		leaf, err := pckCertificate(quote)
-		if err != nil {
-			return err
-		}
-		trust, err := attest.ValidateTrust(policy, leaf, libtdx.SerialBlocklistCapacity)
-		if err != nil {
-			return err
-		}
-		st, err := makeStatement(policy, req, trust)
-		if err != nil {
-			return err
-		}
-		if flags.check {
-			if err := checkQuote(quote, st); err != nil {
-				return err
-			}
-		}
-		circuit, err := circuitFor(flags.circuit, policy.SpecVersion)
-		if err != nil {
-			return err
-		}
-		proof, err := libtdx.Prove(circuit, toLib(st), quote)
-		if err != nil {
-			return err
-		}
-		id, err := libtdx.CircuitID(circuit, policy.SpecVersion)
-		if err != nil {
-			return err
-		}
-		data, err := json.Marshal(proofEnvelope{policy.Profile, policy.SpecVersion, id[:], st, proof})
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(flags.output, data, 0600)
-	},
-}
+var proveQuoteCmd = &cobra.Command{Use: "quote", Short: "Prove a TDX quote", RunE: func(*cobra.Command, []string) error { return proveQuote() }}
 
-var verifyQuoteCmd = &cobra.Command{
-	Use: "quote", Short: "Verify a TDX quote proof", RunE: func(*cobra.Command, []string) error {
-		policy, req, err := load(flags.policy)
-		if err != nil {
-			return err
-		}
-		trust, err := attest.ValidateCollateral(policy, libtdx.SerialBlocklistCapacity)
-		if err != nil {
-			return err
-		}
-		expected, err := makeStatement(policy, req, trust)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(flags.input)
-		if err != nil {
-			return err
-		}
-		var proof proofEnvelope
-		if err := json.Unmarshal(data, &proof); err != nil {
-			return fmt.Errorf("parsing proof: %w", err)
-		}
-		if proof.Profile != policy.Profile || proof.SpecVersion != policy.SpecVersion || !sameStatement(proof.Statement, expected) {
-			return fmt.Errorf("proof statement does not match verifier policy and collateral")
-		}
-		circuit, err := circuitFor(flags.circuit, policy.SpecVersion)
-		if err != nil {
-			return err
-		}
-		id, err := libtdx.CircuitID(circuit, policy.SpecVersion)
-		if err != nil || !bytes.Equal(id[:], proof.CircuitID) {
-			return fmt.Errorf("proof circuit ID does not match verifier circuit")
-		}
-		return libtdx.Verify(circuit, toLib(expected), proof.Proof)
-	},
-}
+var verifyQuoteCmd = &cobra.Command{Use: "quote", Short: "Verify a TDX quote proof", RunE: func(*cobra.Command, []string) error { return verifyQuote() }}
 
 var generateCmd = &cobra.Command{Use: "generate <output>", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
 	c, err := libtdx.GenerateCircuit(6)
@@ -162,18 +86,98 @@ func init() {
 	proveCmd.AddCommand(proveQuoteCmd)
 	verifyCmd.AddCommand(verifyQuoteCmd)
 	circuitCmd.AddCommand(generateCmd)
-	proveQuoteCmd.Flags().StringVar(&flags.input, "input", "", "TDX quote input")
-	proveQuoteCmd.Flags().StringVar(&flags.policy, "policy", "", "Policy JSON")
-	proveQuoteCmd.Flags().StringVar(&flags.circuit, "circuit", "", "Circuit file")
-	proveQuoteCmd.Flags().StringVar(&flags.output, "output", "proof.json", "Proof output")
-	proveQuoteCmd.Flags().BoolVar(&flags.check, "check-requirements", false, "Check the quote before proving")
-	_ = proveQuoteCmd.MarkFlagRequired("input")
+	proveQuoteCmd.Flags().StringVar(&proveQuoteFlags.quote, "quote", "", "TDX quote input")
+	proveQuoteCmd.Flags().StringVar(&proveQuoteFlags.policy, "policy", "", "Policy JSON")
+	proveQuoteCmd.Flags().StringVar(&proveQuoteFlags.circuit, "circuit", "", "Circuit file")
+	proveQuoteCmd.Flags().StringVarP(&proveQuoteFlags.output, "output", "o", "proof.json", "Proof output")
+	proveQuoteCmd.Flags().BoolVar(&proveQuoteFlags.check, "check-requirements", false, "Check the quote before proving")
+	_ = proveQuoteCmd.MarkFlagRequired("quote")
 	_ = proveQuoteCmd.MarkFlagRequired("policy")
-	verifyQuoteCmd.Flags().StringVar(&flags.input, "input", "", "Proof input")
-	verifyQuoteCmd.Flags().StringVar(&flags.policy, "policy", "", "Policy JSON")
-	verifyQuoteCmd.Flags().StringVar(&flags.circuit, "circuit", "", "Circuit file")
+	verifyQuoteCmd.Flags().StringVarP(&verifyQuoteFlags.input, "input", "i", "", "Proof input")
+	verifyQuoteCmd.Flags().StringVar(&verifyQuoteFlags.policy, "policy", "", "Policy JSON")
+	verifyQuoteCmd.Flags().StringVar(&verifyQuoteFlags.circuit, "circuit", "", "Circuit file")
 	_ = verifyQuoteCmd.MarkFlagRequired("input")
 	_ = verifyQuoteCmd.MarkFlagRequired("policy")
+}
+
+func proveQuote() error {
+	policy, req, err := load(proveQuoteFlags.policy)
+	if err != nil {
+		return err
+	}
+	quote, err := os.ReadFile(proveQuoteFlags.quote)
+	if err != nil {
+		return fmt.Errorf("reading quote: %w", err)
+	}
+	leaf, err := pckCertificate(quote)
+	if err != nil {
+		return err
+	}
+	trust, err := attest.ValidateTrust(policy, leaf, libtdx.SerialBlocklistCapacity)
+	if err != nil {
+		return err
+	}
+	st, err := makeStatement(policy, req, trust)
+	if err != nil {
+		return err
+	}
+	if proveQuoteFlags.check {
+		if err := checkQuote(quote, st); err != nil {
+			return err
+		}
+	}
+	circuit, err := circuitFor(proveQuoteFlags.circuit, policy.SpecVersion)
+	if err != nil {
+		return err
+	}
+	proof, err := libtdx.Prove(circuit, toLib(st), quote)
+	if err != nil {
+		return err
+	}
+	id, err := libtdx.CircuitID(circuit, policy.SpecVersion)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(proofEnvelope{policy.Profile, policy.SpecVersion, id[:], st, proof})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(proveQuoteFlags.output, data, 0600)
+}
+
+func verifyQuote() error {
+	policy, req, err := load(verifyQuoteFlags.policy)
+	if err != nil {
+		return err
+	}
+	trust, err := attest.ValidateCollateral(policy, libtdx.SerialBlocklistCapacity)
+	if err != nil {
+		return err
+	}
+	expected, err := makeStatement(policy, req, trust)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(verifyQuoteFlags.input)
+	if err != nil {
+		return err
+	}
+	var proof proofEnvelope
+	if err := attest.DecodeJSON(data, &proof); err != nil {
+		return fmt.Errorf("parsing proof: %w", err)
+	}
+	if proof.Profile != policy.Profile || proof.SpecVersion != policy.SpecVersion || !sameStatement(proof.Statement, expected) {
+		return fmt.Errorf("proof statement does not match verifier policy and collateral")
+	}
+	circuit, err := circuitFor(verifyQuoteFlags.circuit, policy.SpecVersion)
+	if err != nil {
+		return err
+	}
+	id, err := libtdx.CircuitID(circuit, policy.SpecVersion)
+	if err != nil || !bytes.Equal(id[:], proof.CircuitID) {
+		return fmt.Errorf("proof circuit ID does not match verifier circuit")
+	}
+	return libtdx.Verify(circuit, toLib(expected), proof.Proof)
 }
 
 func load(path string) (attest.Policy, requirements, error) {
@@ -185,7 +189,7 @@ func load(path string) (attest.Policy, requirements, error) {
 		return p, requirements{}, fmt.Errorf("policy profile must be %s", profile)
 	}
 	var r requirements
-	if err := json.Unmarshal(p.Requirements, &r); err != nil {
+	if err := attest.DecodeJSON(p.Requirements, &r); err != nil {
 		return p, r, fmt.Errorf("parsing TDX requirements: %w", err)
 	}
 	return p, r, nil

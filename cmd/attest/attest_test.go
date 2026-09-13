@@ -100,6 +100,23 @@ func TestVerifyAtAllowsAttestationKeyUsage(t *testing.T) {
 	}
 }
 
+func TestDecodeJSONRejectsUnknownFields(t *testing.T) {
+	var policy Policy
+	if err := DecodeJSON([]byte(`{"profile":"test","spec_version":6,"verification_time":"20260910170000Z","unexpected":true}`), &policy); err == nil {
+		t.Fatal("unknown policy field was accepted")
+	}
+}
+
+func TestDecodeJSONRequiresExactSnakeCase(t *testing.T) {
+	type input struct {
+		Value string `json:"value"`
+	}
+	var value input
+	if err := DecodeJSON([]byte(`{"Value":"test"}`), &value); err == nil {
+		t.Fatal("Go-style JSON field was accepted")
+	}
+}
+
 func testCertificate(t *testing.T, parent *x509.Certificate, parentKey *ecdsa.PrivateKey, serial int64, ca bool, now time.Time, usages ...x509.ExtKeyUsage) (*x509.Certificate, *ecdsa.PrivateKey) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

@@ -1,4 +1,4 @@
-package collateral
+package tpm
 
 import "testing"
 

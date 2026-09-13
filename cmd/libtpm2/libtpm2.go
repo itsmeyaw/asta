@@ -50,12 +50,6 @@ type Statement struct {
 	ActiveSerials    int
 }
 
-// ProverResult is retained while the legacy TPM command is migrated to the
-// policy-bound API below. It must not be used to create an unbound proof.
-type ProverResult struct {
-	Proof []byte
-}
-
 func GenerateCircuit() ([]byte, error) {
 	var output *C.uint8_t
 	var outputLen C.size_t
@@ -169,17 +163,4 @@ func validate(circuit []byte, statement Statement, variableInput, certificateDER
 	return nil
 }
 
-func bytesPointer(value []byte) *C.uint8_t {
-	return (*C.uint8_t)(unsafe.Pointer(&value[0]))
-}
-
-// RunProver rejects the pre-policy API so callers cannot accidentally create a
-// proof without issuer and CRL public inputs.
-func RunProver(bool, []byte, [32]byte, [32]byte, []byte, [8]byte, [32]byte, string, string, []byte) (*ProverResult, error) {
-	return nil, fmt.Errorf("legacy TPM prover is unsupported; use the policy-bound Prove API")
-}
-
-// RunVerifier rejects the pre-policy API for the same reason as RunProver.
-func RunVerifier(bool, []byte, []byte, [8]byte, [32]byte, []byte) error {
-	return fmt.Errorf("legacy TPM verifier is unsupported; use the policy-bound Verify API")
-}
+func bytesPointer(value []byte) *C.uint8_t { return (*C.uint8_t)(unsafe.Pointer(&value[0])) }

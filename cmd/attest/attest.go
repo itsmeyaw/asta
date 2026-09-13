@@ -22,13 +22,17 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/itsmeyaw/asta/cmd/util"
 )
 
 const VerificationTimeLayout = "20060102150405Z"
@@ -61,7 +65,7 @@ func LoadPolicy(path string) (Policy, error) {
 		return Policy{}, fmt.Errorf("reading policy: %w", err)
 	}
 	var policy Policy
-	if err := json.Unmarshal(data, &policy); err != nil {
+	if err := DecodeJSON(data, &policy); err != nil {
 		return Policy{}, fmt.Errorf("parsing policy: %w", err)
 	}
 	if policy.Profile == "" || policy.SpecVersion == 0 || policy.VerificationTime == "" {
@@ -76,6 +80,59 @@ func LoadPolicy(path string) (Policy, error) {
 	policy.Collateral.IssuerCRL = resolvePath(base, policy.Collateral.IssuerCRL)
 	policy.Collateral.LeafCRL = resolvePath(base, policy.Collateral.LeafCRL)
 	return policy, nil
+}
+
+// DecodeJSON accepts one JSON value and rejects fields outside the versioned schema.
+func DecodeJSON(data []byte, value any) error {
+	if err := validateJSONFields(data, reflect.TypeOf(value)); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("expected one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func validateJSONFields(data []byte, target reflect.Type) error {
+	for target.Kind() == reflect.Pointer {
+		target = target.Elem()
+	}
+	if target.Kind() != reflect.Struct {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for name, raw := range fields {
+		field, ok := jsonField(target, name)
+		if !ok {
+			return fmt.Errorf("unknown JSON field %q", name)
+		}
+		if err := validateJSONFields(raw, field.Type); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func jsonField(target reflect.Type, name string) (reflect.StructField, bool) {
+	for i := 0; i < target.NumField(); i++ {
+		field := target.Field(i)
+		tag := strings.Split(field.Tag.Get("json"), ",")[0]
+		if tag == name {
+			return field, true
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 func ParseVerificationTime(value string) (time.Time, error) {
@@ -95,7 +152,7 @@ func ValidateTrust(policy Policy, leaf *x509.Certificate, capacity int) (Trust, 
 		return Trust{}, err
 	}
 	verifiedAt, _ := ParseVerificationTime(policy.VerificationTime)
-	root, err := readCertificate(policy.Collateral.TrustedRoot)
+	root, err := util.ReadCertificate(policy.Collateral.TrustedRoot)
 	if err != nil {
 		return Trust{}, fmt.Errorf("reading trusted root: %w", err)
 	}
@@ -127,11 +184,11 @@ func validateCollateral(policy Policy, capacity int) (Trust, *x509.Certificate, 
 	if err != nil {
 		return Trust{}, nil, nil, err
 	}
-	issuer, err := readCertificate(policy.Collateral.IssuerCertificate)
+	issuer, err := util.ReadCertificate(policy.Collateral.IssuerCertificate)
 	if err != nil {
 		return Trust{}, nil, nil, fmt.Errorf("reading issuer certificate: %w", err)
 	}
-	root, err := readCertificate(policy.Collateral.TrustedRoot)
+	root, err := util.ReadCertificate(policy.Collateral.TrustedRoot)
 	if err != nil {
 		return Trust{}, nil, nil, fmt.Errorf("reading trusted root: %w", err)
 	}
@@ -144,11 +201,11 @@ func validateCollateral(policy Policy, capacity int) (Trust, *x509.Certificate, 
 	if err := verifyAt(issuer, root, root, verifiedAt); err != nil {
 		return Trust{}, nil, nil, err
 	}
-	issuerCRL, err := readCRL(policy.Collateral.IssuerCRL)
+	issuerCRL, err := util.ReadCRL(policy.Collateral.IssuerCRL)
 	if err != nil {
 		return Trust{}, nil, nil, fmt.Errorf("reading issuer CRL: %w", err)
 	}
-	if err := validateCRL(issuerCRL, root, verifiedAt); err != nil {
+	if err := util.ValidateCRL(issuerCRL, root, verifiedAt); err != nil {
 		return Trust{}, nil, nil, fmt.Errorf("validating issuer CRL: %w", err)
 	}
 	if serialRevoked(issuerCRL, issuer.SerialNumber) {
@@ -162,11 +219,11 @@ func validateCollateral(policy Policy, capacity int) (Trust, *x509.Certificate, 
 			return Trust{}, nil, nil, fmt.Errorf("leaf CRL is required for profile %s", policy.Profile)
 		}
 	} else {
-		leafCRL, err = readCRL(policy.Collateral.LeafCRL)
+		leafCRL, err = util.ReadCRL(policy.Collateral.LeafCRL)
 		if err != nil {
 			return Trust{}, nil, nil, fmt.Errorf("reading leaf CRL: %w", err)
 		}
-		if err := validateCRL(leafCRL, issuer, verifiedAt); err != nil {
+		if err := util.ValidateCRL(leafCRL, issuer, verifiedAt); err != nil {
 			return Trust{}, nil, nil, fmt.Errorf("validating leaf CRL: %w", err)
 		}
 		blocklist, active, err = serialBlocklist(leafCRL, capacity)
@@ -189,34 +246,6 @@ func resolvePath(base, value string) string {
 	return filepath.Join(base, value)
 }
 
-func readCertificate(path string) (*x509.Certificate, error) {
-	if path == "" {
-		return nil, fmt.Errorf("path is required")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if block, _ := pem.Decode(data); block != nil {
-		data = block.Bytes
-	}
-	return x509.ParseCertificate(data)
-}
-
-func readCRL(path string) (*x509.RevocationList, error) {
-	if path == "" {
-		return nil, fmt.Errorf("path is required")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if block, _ := pem.Decode(data); block != nil {
-		data = block.Bytes
-	}
-	return x509.ParseRevocationList(data)
-}
-
 func verifyAt(leaf, issuer, root *x509.Certificate, verifiedAt time.Time) error {
 	roots := x509.NewCertPool()
 	roots.AddCert(root)
@@ -229,19 +258,6 @@ func verifyAt(leaf, issuer, root *x509.Certificate, verifiedAt time.Time) error 
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}); err != nil {
 		return fmt.Errorf("verifying issuer-to-root chain: %w", err)
-	}
-	return nil
-}
-
-func validateCRL(crl *x509.RevocationList, signer *x509.Certificate, verifiedAt time.Time) error {
-	if !bytes.Equal(crl.RawIssuer, signer.RawSubject) {
-		return fmt.Errorf("CRL issuer does not match signer")
-	}
-	if err := crl.CheckSignatureFrom(signer); err != nil {
-		return fmt.Errorf("checking CRL signature: %w", err)
-	}
-	if crl.ThisUpdate.After(verifiedAt) || crl.NextUpdate.IsZero() || verifiedAt.After(crl.NextUpdate) {
-		return fmt.Errorf("CRL is not valid at verification_time")
 	}
 	return nil
 }

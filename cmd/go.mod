@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	github.com/google/go-sev-guest v0.13.0
 	github.com/google/go-tdx-guest v0.3.1
-	github.com/google/go-tpm v0.9.8
 	github.com/spf13/cobra v1.10.2
 )
 
